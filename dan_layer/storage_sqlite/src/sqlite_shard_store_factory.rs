@@ -30,6 +30,7 @@ use tari_dan_core::{
         HotStuffTreeNode,
         NodeHeight,
         ObjectPledge,
+        Payload,
         QuorumCertificate,
         TariDanPayload,
         TreeNodeHash,
@@ -49,11 +50,35 @@ impl ShardStoreFactory for SqliteShardStoreFactory {
     }
 }
 
-pub struct SqliteShardStoreTransaction {}
+pub struct SqliteShardStoreTransaction {
+    // replica data
+    shard_high_qcs: HashMap<ShardId, QuorumCertificate>,
+    // pace maker data
+    shard_leaf_nodes: HashMap<ShardId, (TreeNodeHash, NodeHeight)>,
+    payloads: HashMap<PayloadId, TariDanPayload>,
+    nodes: HashMap<TreeNodeHash, HotStuffTreeNode<PublicKey>>,
+    locked_node_and_heights: HashMap<ShardId, (TreeNodeHash, NodeHeight)>,
+    objects: HashMap<ShardId, HashMap<ObjectId, (SubstateState, Option<ObjectPledge>)>>,
+    last_executed_height: HashMap<ShardId, NodeHeight>,
+    last_voted_heights: HashMap<ShardId, NodeHeight>,
+    payload_votes: HashMap<PayloadId, HashMap<NodeHeight, HashMap<ShardId, HotStuffTreeNode<PublicKey>>>>,
+    votes: HashMap<(TreeNodeHash, ShardId), Vec<(PublicKey, VoteMessage)>>,
+}
 
 impl SqliteShardStoreTransaction {
     fn new() -> Self {
-        Self {}
+        Self {
+            shard_high_qcs: HashMap::new(),
+            shard_leaf_nodes: HashMap::new(),
+            payloads: HashMap::new(),
+            nodes: HashMap::new(),
+            locked_node_and_heights: HashMap::new(),
+            objects: HashMap::new(),
+            last_executed_height: HashMap::new(),
+            last_voted_heights: HashMap::new(),
+            payload_votes: HashMap::new(),
+            votes: HashMap::new(),
+        }
     }
 }
 
@@ -64,116 +89,177 @@ impl ShardStoreTransaction<PublicKey, TariDanPayload> for SqliteShardStoreTransa
         todo!()
     }
 
-    fn update_high_qc(&mut self, _shard: ShardId, _qc: QuorumCertificate) {
-        todo!()
+    fn update_high_qc(&mut self, shard: ShardId, qc: QuorumCertificate) {
+        let entry = self.shard_high_qcs.entry(shard).or_insert_with(|| qc.clone());
+        if qc.local_node_height() > entry.local_node_height() {
+            *entry = qc.clone();
+            self.shard_leaf_nodes
+                .entry(qc.shard())
+                .and_modify(|e| *e = (qc.local_node_hash(), qc.local_node_height()))
+                .or_insert((qc.local_node_hash(), qc.local_node_height()));
+        }
     }
 
-    fn set_payload(&mut self, _payload: TariDanPayload) {
-        todo!()
+    fn set_payload(&mut self, payload: TariDanPayload) {
+        let payload_id = payload.to_id();
+        self.payloads.entry(payload_id).or_insert(payload);
     }
 
-    fn get_leaf_node(&self, _shard: ShardId) -> (TreeNodeHash, NodeHeight) {
-        todo!()
+    fn get_leaf_node(&self, shard: ShardId) -> (TreeNodeHash, NodeHeight) {
+        if let Some(leaf_node) = self.shard_leaf_nodes.get(&shard) {
+            *leaf_node
+        } else {
+            (TreeNodeHash::zero(), NodeHeight(0))
+        }
     }
 
     fn update_leaf_node(
         &mut self,
-        _shard: tari_dan_common_types::ShardId,
-        _node: TreeNodeHash,
-        _height: NodeHeight,
+        shard: tari_dan_common_types::ShardId,
+        node: TreeNodeHash,
+        height: NodeHeight,
     ) -> Result<(), Self::Error> {
-        todo!()
+        let leaf_node = self.shard_leaf_nodes.entry(shard).or_insert((node, height));
+        *leaf_node = (node, height);
+        Ok(())
     }
 
-    fn get_high_qc_for(&self, _shard: ShardId) -> QuorumCertificate {
-        todo!()
+    fn get_high_qc_for(&self, shard: ShardId) -> QuorumCertificate {
+        if let Some(qc) = self.shard_high_qcs.get(&shard) {
+            qc.clone()
+        } else {
+            QuorumCertificate::genesis()
+        }
     }
 
-    fn get_payload(&self, _payload_id: &PayloadId) -> Result<TariDanPayload, Self::Error> {
-        todo!()
+    fn get_payload(&self, payload_id: &PayloadId) -> Result<TariDanPayload, Self::Error> {
+        self.payloads
+            .get(payload_id)
+            .cloned()
+            .ok_or(StoreError::CannotFindPayload)
     }
 
-    fn get_node(&self, _node_hash: &TreeNodeHash) -> Result<HotStuffTreeNode<PublicKey>, Self::Error> {
-        todo!()
+    fn get_node(&self, node_hash: &TreeNodeHash) -> Result<HotStuffTreeNode<PublicKey>, Self::Error> {
+        if node_hash == &TreeNodeHash::zero() {
+            Ok(HotStuffTreeNode::genesis())
+        } else {
+            self.nodes.get(&node_hash).cloned().ok_or(StoreError::NodeNotFound)
+        }
     }
 
-    fn save_node(&mut self, _node: HotStuffTreeNode<PublicKey>) {
-        todo!()
+    fn save_node(&mut self, node: HotStuffTreeNode<PublicKey>) {
+        self.nodes.insert(*node.hash(), node);
     }
 
-    fn get_locked_node_hash_and_height(&self, _shard: ShardId) -> (TreeNodeHash, NodeHeight) {
-        todo!()
+    fn get_locked_node_hash_and_height(&self, shard: ShardId) -> (TreeNodeHash, NodeHeight) {
+        self.locked_node_and_heights
+            .get(&shard)
+            .copied()
+            .unwrap_or((TreeNodeHash::zero(), NodeHeight(0)))
     }
 
-    fn set_locked(&mut self, _shard: ShardId, _node_hash: TreeNodeHash, _node_height: NodeHeight) {
-        todo!()
+    fn set_locked(&mut self, shard: ShardId, node_hash: TreeNodeHash, node_height: NodeHeight) {
+        self.locked_node_and_heights
+            .entry(shard)
+            .and_modify(|e| *e = (node_hash, node_height));
     }
 
     fn pledge_object(
         &mut self,
-        _shard: ShardId,
-        _object: ObjectId,
+        shard: ShardId,
+        object: ObjectId,
         _change: SubstateChange,
-        _payload: PayloadId,
-        _current_height: NodeHeight,
+        payload: PayloadId,
+        current_height: NodeHeight,
     ) -> ObjectPledge {
-        todo!()
+        let shard_data = self.objects.entry(shard).or_insert_with(HashMap::new);
+        let entry = shard_data.entry(object).or_insert((SubstateState::DoesNotExist, None));
+        if let Some(existing_pledge) = &entry.1 {
+            if existing_pledge.pledged_until < current_height {
+                return existing_pledge.clone();
+            }
+        }
+
+        let pledge = ObjectPledge {
+            object_id: object,
+            current_state: entry.0.clone(),
+            pledged_to_payload: payload,
+            pledged_until: current_height + NodeHeight(4), // TODO: why plus 4 ? 
+        };
+        entry.1 = Some(pledge.clone());
+        pledge
     }
 
-    fn set_last_executed_height(&mut self, _shard: ShardId, _height: NodeHeight) {
-        todo!()
+    fn set_last_executed_height(&mut self, shard: ShardId, height: NodeHeight) {
+        self.last_executed_height.entry(shard).and_modify(|e| *e = height);
     }
 
-    fn get_last_executed_height(&self, _shard: ShardId) -> NodeHeight {
-        todo!()
+    fn get_last_executed_height(&self, shard: ShardId) -> NodeHeight {
+        self.last_executed_height.get(&shard).copied().unwrap_or(NodeHeight(0))
     }
 
     fn save_substate_changes(&mut self, _changes: HashMap<ShardId, Option<SubstateState>>, _node: TreeNodeHash) {
         todo!()
     }
 
-    fn get_last_voted_height(&self, _shard: ShardId) -> NodeHeight {
-        todo!()
+    fn get_last_voted_height(&self, shard: ShardId) -> NodeHeight {
+        self.last_voted_heights.get(&shard).copied().unwrap_or(NodeHeight(0))
     }
 
-    fn set_last_voted_height(&mut self, _shard: ShardId, _height: NodeHeight) {
-        todo!()
+    fn set_last_voted_height(&mut self, shard: ShardId, height: NodeHeight) {
+        let entry = self.last_voted_heights.entry(shard).or_insert(height);
+        *entry = height;
     }
 
     fn get_payload_vote(
         &self,
-        _payload: PayloadId,
-        _payload_height: NodeHeight,
-        _shard: ShardId,
+        payload: PayloadId,
+        payload_height: NodeHeight,
+        shard: ShardId,
     ) -> Option<HotStuffTreeNode<PublicKey>> {
-        todo!()
+        self.payload_votes
+            .get(&payload)
+            .and_then(|pv| pv.get(&payload_height))
+            .and_then(|ph| ph.get(&shard).cloned())
     }
 
     fn save_payload_vote(
         &mut self,
-        _shard: ShardId,
-        _payload: PayloadId,
-        _payload_height: NodeHeight,
-        _node: HotStuffTreeNode<PublicKey>,
+        shard: ShardId,
+        payload: PayloadId,
+        payload_height: NodeHeight,
+        node: HotStuffTreeNode<PublicKey>,
     ) {
-        todo!()
+        let payload_entry = self.payload_votes.entry(payload).or_insert_with(HashMap::new);
+        let height_entry = payload_entry.entry(payload_height).or_insert_with(HashMap::new);
+        height_entry.insert(shard, node);
     }
 
-    fn has_vote_for(&self, _from: &PublicKey, _node_hash: TreeNodeHash, _shard: ShardId) -> bool {
-        todo!()
+    fn has_vote_for(&self, from: &PublicKey, node_hash: TreeNodeHash, shard: ShardId) -> bool {
+        if let Some(sigs) = self.votes.get(&(node_hash, shard)) {
+            sigs.iter().any(|(f, _)| f == from)
+        } else {
+            false
+        }
     }
 
     fn save_received_vote_for(
         &mut self,
-        _from: PublicKey,
-        _node_hash: TreeNodeHash,
-        _shard: ShardId,
-        _vote_message: VoteMessage,
+        from: PublicKey,
+        node_hash: TreeNodeHash,
+        shard: ShardId,
+        vote_message: VoteMessage,
     ) -> usize {
-        todo!()
+        let entry = self.votes.entry((node_hash, shard)).or_insert(vec![]);
+        entry.push((from, vote_message));
+        entry.len()
+
     }
 
-    fn get_received_votes_for(&self, _node_hash: TreeNodeHash, _shard: ShardId) -> Vec<VoteMessage> {
-        todo!()
+    fn get_received_votes_for(&self, node_hash: TreeNodeHash, shard: ShardId) -> Vec<VoteMessage> {
+        self.votes
+            .get(&(node_hash, shard))
+            .map(|v| v.iter().map(|s| s.1.clone()).collect())
+            .unwrap_or_default()
     }
 }
