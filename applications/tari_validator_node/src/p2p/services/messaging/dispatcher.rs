@@ -56,7 +56,7 @@ impl MessageDispatcher {
                 DanMessage::NewTransaction(msg) => self
                     .message_senders
                     .tx_new_transaction_message
-                    .send((from, msg))
+                    .send(msg)
                     .await
                     .ok(),
                 DanMessage::NetworkAnnounce(announce) => self
