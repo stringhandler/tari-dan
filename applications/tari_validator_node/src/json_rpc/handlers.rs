@@ -34,8 +34,9 @@ use tari_comms::{multiaddr::Multiaddr, peer_manager::NodeId, types::CommsPublicK
 use tari_dan_engine::instruction::Transaction;
 
 use crate::{
-    grpc::services::wallet_client::{GrpcWalletClient, TemplateRegistrationRequest},
-    json_rpc::jrpc_errors::internal_error,
+    grpc::services::wallet_client::GrpcWalletClient,
+    json_rpc::{jrpc_errors::internal_error, messages::SubmitTransactionRequest},
+    p2p::services::mempool::MempoolHandle,
 };
 
 const _LOG_TARGET: &str = "tari::validator_node::json_rpc::handlers";
