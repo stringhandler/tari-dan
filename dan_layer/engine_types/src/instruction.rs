@@ -9,7 +9,7 @@ use tari_template_lib::{
     Hash,
 };
 
-use crate::hashing::hasher;
+use crate::{hashing::hasher, substate::SubstateAddress};
 
 #[derive(Debug, Clone, Encode, Deserialize, Serialize, PartialEq)]
 #[serde(tag = "type")]
@@ -27,6 +27,17 @@ pub enum Instruction {
     },
     PutLastInstructionOutputOnWorkspace {
         key: Vec<u8>,
+    },
+    StoreFilePiece {
+        hash: Hash,
+        data: Vec<u8>,
+    },
+    StoreFileHeader {
+        mime_type: String,
+        pieces_hashes: Vec<Hash>,
+        pieces_addresses: Vec<SubstateAddress>,
+        piece_length: u32,
+        total_length: u32,
     },
 }
 

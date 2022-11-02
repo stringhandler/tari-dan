@@ -20,7 +20,12 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::{convert::TryFrom, path::Path, str::FromStr};
+use std::{
+    convert::TryFrom,
+    fs::File,
+    path::{Path, PathBuf},
+    str::FromStr,
+};
 
 use clap::{Args, Subcommand};
 use tari_dan_common_types::ShardId;
@@ -139,6 +144,9 @@ pub enum CliInstruction {
         #[clap(long, short = 'a')]
         args: Vec<CliArg>,
     },
+    Upload {
+        path: PathBuf,
+    },
 }
 
 impl TransactionSubcommand {
@@ -182,6 +190,15 @@ async fn handle_submit(
                 component_address: component_address.into_inner(),
                 method: method_name,
                 args: args.iter().map(|s| Arg::literal(s.to_bytes())).collect(),
+            }
+        },
+        CliInstruction::Upload { path } => {
+            let mut file = File::open(path)?;
+            let mut buffer = Vec::new();
+            file.read_to_end(&mut buffer)?;
+            Instruction::Upload {
+                code: buffer,
+                args: vec![],
             }
         },
     };
@@ -244,6 +261,23 @@ fn summarize(result: &FinalizeResult) {
                     },
                     SubstateValue::Vault(vault) => {
                         println!("       ▶ vault: {} {}", vault.id(), vault.resource_address());
+                    },
+                    SubstateValue::FilePiece { address, hash, data } => {
+                        println!("        ▶ file piece: {} {}", address, hash);
+                    },
+                    SubstateValue::FileHeader {
+                        address,
+                        mime_type,
+                        pieces_hashes,
+                        total_length,
+                        ..
+                    } => {
+                        println!(
+                            "        ▶ file header: {} {} pieces. size:{}",
+                            address,
+                            pieces_hashes.len(),
+                            total_length
+                        );
                     },
                 }
                 println!();

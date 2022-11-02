@@ -41,6 +41,7 @@ use tari_template_lib::{
         WorkspaceAction,
     },
     models::{Amount, BucketId, VaultRef},
+    Hash,
 };
 
 use crate::runtime::{
@@ -350,6 +351,31 @@ impl RuntimeInterface for RuntimeInterfaceImpl {
     fn set_last_instruction_output(&self, value: Option<Vec<u8>>) -> Result<(), RuntimeError> {
         self.tracker.set_last_instruction_output(value);
         Ok(())
+    }
+
+    fn set_file_piece(&self, hash: Hash, data: Vec<u8>) -> Result<(), RuntimeError> {
+        let address = self.tracker.new_raw_address()?;
+        self.tracker
+            .set_substate(SubstateValue::FilePiece { address, hash, data })
+    }
+
+    fn set_file_header(
+        &self,
+        mime_type: String,
+        pieces_hashes: Vec<Hash>,
+        pieces_addresses: Vec<SubstateAddress>,
+        piece_length: u32,
+        total_length: u32,
+    ) -> Result<(), RuntimeError> {
+        let address = self.tracker.new_raw_address()?;
+        self.tracker.set_substate(SubstateValue::FileHeader {
+            address,
+            mime_type,
+            pieces_hashes,
+            pieces_addresses,
+            piece_length,
+            total_length,
+        })
     }
 
     fn finalize(&self) -> Result<FinalizeResult, RuntimeError> {

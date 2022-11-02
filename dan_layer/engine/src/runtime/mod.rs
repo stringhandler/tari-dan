@@ -53,6 +53,7 @@ use tari_template_lib::{
     },
     invoke_args,
     models::VaultRef,
+    Hash,
 };
 pub use tracker::{RuntimeState, StateTracker};
 
@@ -95,6 +96,15 @@ pub trait RuntimeInterface: Send + Sync {
 
     fn set_last_instruction_output(&self, value: Option<Vec<u8>>) -> Result<(), RuntimeError>;
 
+    fn set_file_piece(&self, hash: Hash, data: Vec<u8>) -> Result<(), RuntimeError>;
+    fn set_file_header(
+        &self,
+        mime_type: String,
+        pieces_hashes: Vec<Hash>,
+        pieces_addresses: Vec<SubstateAddress>,
+        piece_length: u32,
+        total_length: u32,
+    ) -> Result<(), RuntimeError>;
     fn finalize(&self) -> Result<FinalizeResult, RuntimeError>;
 }
 

@@ -32,6 +32,7 @@ impl ShardId {
             SubstateAddress::Component(addr) => addr.into_array().into(),
             SubstateAddress::Resource(addr) => addr.into_array().into(),
             SubstateAddress::Vault(vault_id) => vault_id.into_array().into(),
+            SubstateAddress::Raw(hash) => hash.into_array().into(),
         }
     }
 

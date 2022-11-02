@@ -134,6 +134,26 @@ where TRuntimeInterface: RuntimeInterface + Clone + 'static
                     .workspace_invoke(WorkspaceAction::PutLastInstructionOutput, invoke_args![key])?;
                 Ok(ExecutionResult::empty())
             },
+            Instruction::StoreFilePiece { hash, data } => {
+                self.runtime_interface.set_file_piece(hash, data)?;
+                Ok(ExecutionResult::empty())
+            },
+            Instruction::StoreFileHeader {
+                mime_type,
+                pieces_hashes,
+                pieces_addresses,
+                piece_length,
+                total_length,
+            } => {
+                self.runtime_interface.set_file_header(
+                    mime_type,
+                    pieces_hashes,
+                    pieces_addresses,
+                    piece_length,
+                    total_length,
+                )?;
+                Ok(ExecutionResult::empty())
+            },
         }
     }
 

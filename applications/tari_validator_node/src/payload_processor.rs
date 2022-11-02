@@ -121,6 +121,33 @@ fn create_populated_state_store<I: IntoIterator<Item = ObjectPledge>>(inputs: I)
                         )
                         .unwrap();
                     },
+                    SubstateValue::FilePiece { address, hash, data } => {
+                        // Maybe we should no allow reading of this data?
+                        tx.set_state(address, SubstateValue::FilePiece {
+                            address: *address,
+                            hash: *hash,
+                            data: data.clone(),
+                        })
+                        .unwrap();
+                    },
+                    SubstateValue::FileHeader {
+                        address,
+                        mime_type,
+                        pieces_hashes,
+                        pieces_addresses,
+                        piece_length,
+                        total_length,
+                    } => {
+                        tx.set_state(address, SubstateValue::FileHeader {
+                            address: *address,
+                            mime_type: mime_type.clone(),
+                            pieces_hashes: pieces_hashes.clone(),
+                            pieces_addresses: pieces_addresses.clone(),
+                            piece_length: *piece_length,
+                            total_length: *total_length,
+                        })
+                        .unwrap();
+                    },
                 }
             },
             SubstateState::DoesNotExist | SubstateState::Down { .. } => { /* Do nothing */ },

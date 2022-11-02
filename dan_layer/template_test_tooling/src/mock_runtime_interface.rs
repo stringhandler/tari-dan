@@ -154,6 +154,21 @@ impl RuntimeInterface for MockRuntimeInterface {
         self.inner.set_last_instruction_output(value)
     }
 
+    fn set_file_piece(&self, hash: Hash, data: Vec<u8>) -> Result<(), RuntimeError> {
+        todo!()
+    }
+
+    fn set_file_header(
+        &self,
+        mime_type: String,
+        pieces_hashes: Vec<Hash>,
+        pieces_addresses: Vec<SubstateAddress>,
+        piece_length: u32,
+        total_length: u32,
+    ) -> Result<(), RuntimeError> {
+        todo!()
+    }
+
     fn finalize(&self) -> Result<FinalizeResult, RuntimeError> {
         self.add_call("finalize");
         self.inner.finalize()

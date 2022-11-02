@@ -71,6 +71,7 @@ pub enum SubstateAddress {
     Component(ComponentAddress),
     Resource(ResourceAddress),
     Vault(VaultId),
+    Raw(Hash),
 }
 
 impl SubstateAddress {
@@ -79,6 +80,7 @@ impl SubstateAddress {
             SubstateAddress::Component(address) => address,
             SubstateAddress::Resource(address) => address,
             SubstateAddress::Vault(id) => id,
+            SubstateAddress::Raw(id) => id,
         }
     }
 }
@@ -102,6 +104,7 @@ impl Display for SubstateAddress {
             SubstateAddress::Component(addr) => write!(f, "Component({})", addr),
             SubstateAddress::Resource(addr) => write!(f, "Resource({})", addr),
             SubstateAddress::Vault(addr) => write!(f, "Vault({})", addr),
+            SubstateAddress::Raw(addr) => write!(f, "Raw({})", addr),
         }
     }
 }
@@ -111,6 +114,19 @@ pub enum SubstateValue {
     Component(ComponentInstance),
     Resource(Resource),
     Vault(Vault),
+    FilePiece {
+        address: SubstateAddress,
+        hash: Hash,
+        data: Vec<u8>,
+    },
+    FileHeader {
+        address: SubstateAddress,
+        mime_type: String,
+        pieces_hashes: Vec<Hash>,
+        pieces_addresses: Vec<SubstateAddress>,
+        piece_length: u32,
+        total_length: u32,
+    },
 }
 
 impl SubstateValue {

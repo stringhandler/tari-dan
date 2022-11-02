@@ -76,7 +76,7 @@ struct WorkingState {
     new_resources: HashMap<ResourceAddress, SubstateValue>,
     new_components: HashMap<ComponentAddress, SubstateValue>,
     new_vaults: HashMap<VaultId, SubstateValue>,
-
+    new_raws: HashMap<Hash, SubstateValue>,
     runtime_state: Option<RuntimeState>,
     last_instruction_output: Option<Vec<u8>>,
     workspace: HashMap<Vec<u8>, Vec<u8>>,
@@ -92,6 +92,7 @@ impl StateTracker {
                 new_resources: HashMap::new(),
                 new_components: HashMap::new(),
                 new_vaults: HashMap::new(),
+                new_raws: HashMap::new(),
                 runtime_state: None,
                 last_instruction_output: None,
                 workspace: HashMap::new(),
@@ -224,6 +225,7 @@ impl StateTracker {
             SubstateAddress::Component(addr) => state.new_components.get(addr).cloned(),
             SubstateAddress::Resource(addr) => state.new_resources.get(addr).cloned(),
             SubstateAddress::Vault(addr) => state.new_vaults.get(addr).cloned(),
+            SubstateAddress::Raw(addr) => state.new_raws.get(addr).cloned(),
         });
         match substate {
             Some(substate) => Ok(substate),
@@ -253,6 +255,33 @@ impl StateTracker {
                 },
                 SubstateValue::Vault(vault) => {
                     state.new_vaults.insert(vault.id(), vault.into());
+                },
+                SubstateValue::FilePiece { address, hash, data } => {
+                    state.new_raws.insert(
+                        address.into_hash(),
+                        SubstateValue::FilePiece { address, hash, data }.into(),
+                    );
+                },
+                SubstateValue::FileHeader {
+                    address,
+                    mime_type,
+                    pieces_hashes,
+                    pieces_addresses,
+                    piece_length,
+                    total_length,
+                } => {
+                    state.new_raws.insert(
+                        address.into_hash(),
+                        SubstateValue::FileHeader {
+                            address,
+                            mime_type,
+                            pieces_hashes,
+                            pieces_addresses,
+                            piece_length,
+                            total_length,
+                        }
+                        .into(),
+                    );
                 },
             }
             Ok(())
@@ -301,6 +330,11 @@ impl StateTracker {
                 },
             }
         })
+    }
+
+    pub fn new_raw_address(&self) -> Result<SubstateAddress, RuntimeError> {
+        let address = self.id_provider.new_raw_id();
+        Ok(SubstateAddress::Raw(address))
     }
 
     fn runtime_state(&self) -> Result<RuntimeState, RuntimeError> {

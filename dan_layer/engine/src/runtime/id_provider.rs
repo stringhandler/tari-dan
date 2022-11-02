@@ -79,4 +79,8 @@ impl IdProvider {
     pub fn new_bucket_id(&self) -> BucketId {
         self.next()
     }
+
+    pub fn new_raw_id(&self) -> Hash {
+        self.new_id()
+    }
 }

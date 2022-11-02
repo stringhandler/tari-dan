@@ -21,13 +21,16 @@
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 use tari_dan_engine::{
+    crypto::create_key_pair,
     packager::{PackageError, TemplateModuleLoader},
+    transaction::Transaction,
     wasm::{compile::compile_template, WasmExecutionError},
 };
-use tari_engine_types::instruction::Instruction;
+use tari_engine_types::{commit_result::FinalizeResult, instruction::Instruction};
 use tari_template_lib::{
     args,
     models::{Amount, ComponentAddress},
+    Hash,
 };
 use tari_template_test_tooling::TemplateTest;
 
@@ -230,4 +233,29 @@ fn test_tuples() {
     template_test.call_method::<()>(component_id, "set", args![new_value]);
     let value: u32 = template_test.call_method(component_id, "get", args![]);
     assert_eq!(value, new_value);
+}
+
+#[test]
+fn test_file_store() {
+    todo!()
+    // let instructions = vec![
+    //     Instruction::StoreFilePiece { hash: Hash::from([1u8;32]), data: vec![3u8;256] },
+    //     Instruction::StoreFileHeader {
+    //         mime_type: "text/plain".to_string(),
+    //         pieces_hashes: vec![Hash::from([1u8;32])],
+    //         pieces_addresses: vec![Hash::from([2u8;32])],
+    //         piece_length: 1,
+    //         total_length: 256
+    //     },
+    // ];
+    //     let mut builder = Transaction::builder();
+    //     for instruction in instructions {
+    //         builder.add_instruction(instruction);
+    //     }
+    // let (secret_key, _) = create_key_pair();
+    //     builder.sign(&secret_key);
+    //     let transaction = builder.build();
+    //
+    //     self.processor.execute(transaction).unwrap()
+    // }
 }
