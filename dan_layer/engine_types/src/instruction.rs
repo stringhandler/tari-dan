@@ -5,6 +5,8 @@ use std::fmt::{Display, Formatter};
 
 use serde::{Deserialize, Serialize};
 use tari_bor::{borsh, Encode};
+use tari_crypto::ristretto::{RistrettoComSig, RistrettoPublicKey};
+use tari_mmr::MerkleProof;
 use tari_template_lib::{
     args::{Arg, LogLevel},
     models::{ComponentAddress, TemplateAddress},
@@ -32,6 +34,11 @@ pub enum Instruction {
     EmitLog {
         level: LogLevel,
         message: String,
+    },
+    ImportUtxo {
+        commitment: RistrettoPublicKey,
+        proof_of_knowledge: RistrettoComSig,
+        proof_of_existence: MerkleProof,
     },
 }
 
@@ -67,6 +74,17 @@ impl Display for Instruction {
             },
             Self::EmitLog { level, message } => {
                 write!(f, "EmitLog {{ level: {:?}, message: {:?} }}", level, message)
+            },
+            Self::ImportUtxo {
+                commitment,
+                proof_of_knowledge,
+                proof_of_existence,
+            } => {
+                write!(
+                    f,
+                    "ImportUtxo {{ commitment: {:?}, proof_of_knowledge: {:?}, proof_of_existence: {:?} }}",
+                    commitment, proof_of_knowledge, proof_of_existence
+                )
             },
         }
     }

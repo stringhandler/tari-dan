@@ -136,6 +136,7 @@ where TRuntimeInterface: RuntimeInterface + Clone + 'static
                 runtime.interface().emit_log(level, message);
                 Ok(ExecutionResult::empty())
             },
+            Instruction::ImportUtxo { .. } => runtime.interface().utxo_invoke(UtxoAction::Mint, invoke_args![])?,
         }
     }
 

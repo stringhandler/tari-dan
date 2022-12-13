@@ -28,7 +28,19 @@ use std::{
 
 use anyhow::anyhow;
 use clap::{Args, Subcommand};
+use rand::rngs::OsRng;
 use tari_common_types::types::FixedHash;
+use tari_crypto::{
+    commitment::HomomorphicCommitmentFactory,
+    hasher,
+    keys::{PublicKey, SecretKey},
+    ristretto::{
+        pedersen::{commitment_factory::PedersenCommitmentFactory, PedersenCommitment},
+        RistrettoComSig,
+        RistrettoPublicKey,
+        RistrettoSecretKey,
+    },
+};
 use tari_dan_common_types::{ShardId, SubstateChange};
 use tari_dan_engine::transaction::Transaction;
 use tari_engine_types::{
@@ -44,7 +56,7 @@ use tari_template_lib::{
     models::{Amount, ComponentAddress},
 };
 use tari_transaction_manifest::parse_manifest;
-use tari_utilities::hex::to_hex;
+use tari_utilities::{hex::to_hex, ByteArray};
 use tari_validator_node_client::{
     types::{GetTransactionRequest, SubmitTransactionRequest, TransactionFinalizeResult},
     ValidatorNodeClient,
@@ -123,6 +135,12 @@ pub enum CliInstruction {
         #[clap(long, short = 'a')]
         args: Vec<CliArg>,
     },
+    ImportBurntUtxo {
+        #[clap(long, short = 'k')]
+        blinding_key: FromHex<Vec<u8>>,
+        #[clap(long, short = 'v')]
+        value: u64,
+    },
 }
 
 impl TransactionSubcommand {
@@ -182,6 +200,16 @@ async fn handle_submit(
             component_address: component_address.into_inner(),
             method: method_name,
             args: args.iter().map(|s| s.to_arg()).collect(),
+        },
+        CliInstruction::ImportBurntUtxo { blinding_key, value } => {
+            let secret = RistrettoSecretKey::from_bytes(&blinding_key.into_inner())?;
+            let value_secret = RistrettoSecretKey::from(value);
+            let factory = PedersenCommitmentFactory::default();
+            let commitment = factory.commit(&secret, &value_secret);
+            let (nonce_a, nonce_pub_a) = RistrettoPublicKey::random_keypair(&mut OsRng);
+            let (nonce_x, nonce_pub_x) = RistrettoPublicKey::random_keypair(&mut OsRng);
+            let signature = RistrettoComSig::sign(&secret, &value_secret, &nonce_a, &nonce_x, b"todo", &factory)?;
+            Instruction::ImportUtxo { commitment }
         },
     };
 
