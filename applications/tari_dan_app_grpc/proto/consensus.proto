@@ -75,12 +75,14 @@ message VoteMessage {
   QuorumDecision decision = 2;
   repeated ShardPledge all_shard_pledges = 3;
   ValidatorMetadata validator_metadata = 4;
+  repeated bytes pending_dynamic_shards = 5;
 }
 
 enum QuorumDecision {
   QUORUM_DECISION_UNKNOWN = 0;
   QUORUM_DECISION_ACCEPT = 1;
   QUORUM_DECISION_REJECT = 2;
+  QUORUM_DECISION_PENDING_DYNAMIC_SHARDS = 3;
 }
 
 message ObjectPledge {

@@ -49,8 +49,8 @@ pub enum RuntimeError {
     StateDbError(#[from] anyhow::Error),
     #[error("State storage error: {0}")]
     StateStoreError(#[from] StateStoreError),
-    #[error("Substate not found with address '{address}'")]
-    SubstateNotFound { address: SubstateAddress },
+    // #[error("Substate not found with address '{address}'")]
+    // SubstateNotFound { address: SubstateAddress },
     #[error("Component not found with address '{address}'")]
     ComponentNotFound { address: ComponentAddress },
     #[error("Layer one commitment not found with address '{address}'")]

@@ -12,9 +12,10 @@ use tari_engine_types::commit_result::RejectReason;
 
 use crate::{Epoch, NodeHeight, PayloadId, ShardId, ShardPledgeCollection, TreeNodeHash, ValidatorMetadata};
 
-#[derive(Debug, Clone, Copy, Deserialize, Serialize, PartialEq, Eq, BorshSerialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, PartialEq, Eq, BorshSerialize)]
 pub enum QuorumDecision {
     Accept,
+    PendingDynamicShards,
     Reject(QuorumRejectReason),
 }
 
@@ -30,37 +31,42 @@ pub enum QuorumRejectReason {
     ExecutionFailure,
     PreviousQcRejection,
     ShardPledgedToAnotherPayload,
-    ShardRejected,
+    OtherShardRejected,
 }
 
+
+change to not use these codes
+
 impl QuorumRejectReason {
-    pub fn as_u8(&self) -> u8 {
+    pub fn as_u16(&self) -> u16 {
         match self {
-            QuorumRejectReason::ShardNotPledged => 1,
-            QuorumRejectReason::ExecutionFailure => 2,
-            QuorumRejectReason::PreviousQcRejection => 3,
-            QuorumRejectReason::ShardPledgedToAnotherPayload => 4,
-            QuorumRejectReason::ShardRejected => 5,
+            QuorumRejectReason::ShardNotPledged => 404,
+            QuorumRejectReason::ExecutionFailure => 501,
+            QuorumRejectReason::PreviousQcRejection => 502,
+            QuorumRejectReason::ShardPledgedToAnotherPayload => 409,
+            QuorumRejectReason::OtherShardRejected => 503,
         }
     }
 }
 
 impl QuorumDecision {
-    pub fn as_u8(&self) -> u8 {
+    pub fn as_u16(&self) -> u16 {
         match self {
-            QuorumDecision::Accept => 0,
-            QuorumDecision::Reject(reason) => reason.as_u8(),
+            QuorumDecision::Accept => 200,
+            QuorumDecision::Reject(reason) => reason.as_u16(),
+            QuorumDecision::PendingDynamicShards => 301,
         }
     }
 
-    pub fn from_u8(v: u8) -> Result<Self, anyhow::Error> {
+    pub fn from_u16(v: u16) -> Result<Self, anyhow::Error> {
         match v {
-            0 => Ok(QuorumDecision::Accept),
-            1 => Ok(QuorumDecision::Reject(QuorumRejectReason::ShardNotPledged)),
-            2 => Ok(QuorumDecision::Reject(QuorumRejectReason::ExecutionFailure)),
-            3 => Ok(QuorumDecision::Reject(QuorumRejectReason::PreviousQcRejection)),
-            4 => Ok(QuorumDecision::Reject(QuorumRejectReason::ShardPledgedToAnotherPayload)),
-            5 => Ok(QuorumDecision::Reject(QuorumRejectReason::ShardRejected)),
+            200 => Ok(QuorumDecision::Accept),
+            301 => Ok(QuorumDecision::PendingDynamicShards),
+            404 => Ok(QuorumDecision::Reject(QuorumRejectReason::ShardNotPledged)),
+            501 => Ok(QuorumDecision::Reject(QuorumRejectReason::ExecutionFailure)),
+            502 => Ok(QuorumDecision::Reject(QuorumRejectReason::PreviousQcRejection)),
+            409 => Ok(QuorumDecision::Reject(QuorumRejectReason::ShardPledgedToAnotherPayload)),
+            503 => Ok(QuorumDecision::Reject(QuorumRejectReason::OtherShardRejected)),
             // TODO: Add error type
             _ => Err(anyhow::anyhow!("Invalid QuorumDecision")),
         }
@@ -74,7 +80,7 @@ impl<T: Borrow<RejectReason>> From<T> for QuorumRejectReason {
             RejectReason::ExecutionFailure(_) => QuorumRejectReason::ExecutionFailure,
             RejectReason::PreviousQcRejection => QuorumRejectReason::PreviousQcRejection,
             RejectReason::ShardPledgedToAnotherPayload(_) => QuorumRejectReason::ShardPledgedToAnotherPayload,
-            RejectReason::ShardRejected(_) => QuorumRejectReason::ShardRejected,
+            RejectReason::OtherShardRejected(_) => QuorumRejectReason::OtherShardRejected,
         }
     }
 }
@@ -90,6 +96,7 @@ pub struct QuorumCertificate {
     shard: ShardId,
     epoch: Epoch,
     decision: QuorumDecision,
+    decision_pending_dynamic_shards: Option<Vec<ShardId>>,
     all_shard_pledges: ShardPledgeCollection,
     validators_metadata: Vec<ValidatorMetadata>,
 }
@@ -111,6 +118,7 @@ impl QuorumCertificate {
         shard: ShardId,
         epoch: Epoch,
         decision: QuorumDecision,
+        decision_pending_dynamic_shards: Option<Vec<ShardId>>,
         all_shard_pledges: ShardPledgeCollection,
         validators_metadata: Vec<ValidatorMetadata>,
     ) -> Self {
@@ -122,6 +130,7 @@ impl QuorumCertificate {
             shard,
             epoch,
             decision,
+            decision_pending_dynamic_shards,
             all_shard_pledges,
             validators_metadata,
         }
@@ -136,6 +145,7 @@ impl QuorumCertificate {
             shard: shard_id,
             epoch,
             decision: QuorumDecision::Accept,
+            decision_pending_dynamic_shards: None,
             all_shard_pledges: ShardPledgeCollection::empty(),
             validators_metadata: vec![],
         }
@@ -198,6 +208,10 @@ impl QuorumCertificate {
 
     pub fn decision(&self) -> &QuorumDecision {
         &self.decision
+    }
+
+    pub fn decision_pending_dynamic_shards(&self) -> Option<&Vec<ShardId>> {
+        self.decision_pending_dynamic_shards.as_ref()
     }
 
     pub fn all_shard_pledges(&self) -> &ShardPledgeCollection {

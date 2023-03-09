@@ -44,22 +44,40 @@ const LOG_TARGET: &str = "tari::validator_node::models::vote_message";
 pub struct VoteMessage {
     local_node_hash: TreeNodeHash,
     decision: QuorumDecision,
+    // TODO: combine with above in a new struct. Currently QuorumDecision can be
+    // converted to a u16, but can't with this extra data
+    decision_pending_dynamic_shards: Option<Vec<ShardId>>,
     all_shard_pledges: ShardPledgeCollection,
     validator_metadata: Option<ValidatorMetadata>,
 }
 
 impl VoteMessage {
-    pub fn new(local_node_hash: TreeNodeHash, decision: QuorumDecision, shard_pledges: ShardPledgeCollection) -> Self {
+    fn new(
+        local_node_hash: TreeNodeHash,
+        decision: QuorumDecision,
+        shard_pledges: ShardPledgeCollection,
+        decision_pending_dynamic_shards: Option<Vec<ShardId>>,
+    ) -> Self {
         Self {
             local_node_hash,
             decision,
             all_shard_pledges: shard_pledges,
             validator_metadata: None,
+            decision_pending_dynamic_shards,
         }
     }
 
     pub fn accept(local_node_hash: TreeNodeHash, shard_pledges: ShardPledgeCollection) -> Self {
-        Self::new(local_node_hash, QuorumDecision::Accept, shard_pledges)
+        Self::new(local_node_hash, QuorumDecision::Accept, shard_pledges, None)
+    }
+
+    pub fn include_dynamic_shards(
+        local_node_hash: TreeNodeHash,
+        shard_pledges: ShardPledgeCollection,
+        dynamic_shards: Vec<ShardId>,
+    ) -> Self {
+        let decision = QuorumDecision::PendingDynamicShards;
+        Self::new(local_node_hash, decision, shard_pledges, Some(dynamic_shards))
     }
 
     pub fn reject(
@@ -68,7 +86,7 @@ impl VoteMessage {
         reason: QuorumRejectReason,
     ) -> Self {
         let decision = QuorumDecision::Reject(reason);
-        Self::new(local_node_hash, decision, shard_pledges)
+        Self::new(local_node_hash, decision, shard_pledges, None)
     }
 
     pub fn with_validator_metadata(
@@ -76,12 +94,14 @@ impl VoteMessage {
         decision: QuorumDecision,
         all_shard_pledges: ShardPledgeCollection,
         validator_metadata: ValidatorMetadata,
+        decision_pending_dynamic_shards: Option<Vec<ShardId>>,
     ) -> Self {
         Self {
             local_node_hash,
             decision,
             all_shard_pledges,
             validator_metadata: Some(validator_metadata),
+            decision_pending_dynamic_shards,
         }
     }
 
@@ -143,7 +163,8 @@ impl VoteMessage {
     pub fn construct_challenge(&self) -> FixedHash {
         tari_hasher::<TariDanCoreHashDomain>("vote_message")
             .chain(self.local_node_hash.as_bytes())
-            .chain(&[self.decision.as_u8()])
+            .chain(&[self.decision.as_u16()])
+            .chain(&self.decision_pending_dynamic_shards)
             .chain(self.all_shard_pledges())
             .result()
     }

@@ -879,6 +879,9 @@ where
                         payload_result.finalize_result,
                     ));
                 },
+                TransactionResult::MissingShards(shards) => {
+                    todo!("go back to prepare");
+                },
                 TransactionResult::Reject(reason) => {
                     self.publish_event(HotStuffEvent::Failed(node.payload_id(), reason.to_string()));
                 },
@@ -1089,7 +1092,7 @@ where
                 // If a shard has been rejected, we vote to reject all our shards
                 let finalize_result = FinalizeResult::reject(
                     payload_id.into_array().into(),
-                    RejectReason::ShardRejected(
+                    RejectReason::OtherShardRejected(
                         rejected_nodes
                             .iter()
                             .map(|n| format!("{}({:?})", n.shard(), n.justify().decision()))
@@ -1486,7 +1489,12 @@ where
     }
 
     fn validate_vote(&self, qc: &QuorumCertificate, public_key: &PublicKey, signature: &Signature) -> bool {
-        let vote = VoteMessage::new(qc.node_hash(), *qc.decision(), qc.all_shard_pledges().clone());
+        let vote = VoteMessage::new(
+            qc.node_hash(),
+            *qc.decision(),
+            qc.all_shard_pledges().clone(),
+            qc.decision_pending_dynamic_shards().cloned(),
+        );
         let challenge = vote.construct_challenge();
         self.signing_service
             .verify_for_public_key(public_key, signature, &*challenge)
@@ -1620,7 +1628,7 @@ where
                         TransactionResult::Accept(_) => {
                             tx.complete_pledges(node.shard(), node.payload_id(), node.hash())?;
                         },
-                        TransactionResult::Reject(_) => {
+                        TransactionResult::MissingShards(_) | TransactionResult::Reject(_) => {
                             info!(
                                 target: LOG_TARGET,
                                 "🔥 on_commit ABANDON pledge for payload {}, shard{}",
@@ -1729,6 +1737,10 @@ where
                     accept.down_iter().count(),
                 );
                 VoteMessage::accept(node_hash, shard_pledges)
+            },
+            TransactionResult::MissingShards(shards) => {
+                info!(target: LOG_TARGET, "HELLLO Vote to include more shards: {:?}", shards);
+                VoteMessage::reject(node_hash, shard_pledges, "missing shards".into())
             },
             TransactionResult::Reject(ref reason) => {
                 info!(target: LOG_TARGET, "⚔ Vote to REJECT payload: {}", reason);

@@ -23,7 +23,11 @@
 use serde::{Deserialize, Serialize};
 use tari_template_lib::Hash;
 
-use crate::{execution_result::ExecutionResult, logs::LogEntry, substate::SubstateDiff};
+use crate::{
+    execution_result::ExecutionResult,
+    logs::LogEntry,
+    substate::{SubstateAddress, SubstateDiff},
+};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalizeResult {
@@ -55,6 +59,7 @@ impl FinalizeResult {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum TransactionResult {
     Accept(SubstateDiff),
+    MissingShards(Vec<SubstateAddress>),
     Reject(RejectReason),
 }
 
@@ -67,6 +72,7 @@ impl TransactionResult {
         match self {
             Self::Accept(substate_diff) => Some(substate_diff),
             Self::Reject(_) => None,
+            TransactionResult::MissingShards(_) => None,
         }
     }
 
@@ -74,6 +80,7 @@ impl TransactionResult {
         match self {
             Self::Accept(_) => None,
             Self::Reject(reject_result) => Some(reject_result),
+            TransactionResult::MissingShards(_) => None,
         }
     }
 
@@ -82,6 +89,9 @@ impl TransactionResult {
             Self::Accept(substate_diff) => substate_diff,
             Self::Reject(reject_result) => {
                 panic!("{}: {:?}", msg, reject_result);
+            },
+            TransactionResult::MissingShards(_) => {
+                panic!("{}: Missing shards", msg);
             },
         }
     }
@@ -93,7 +103,7 @@ pub enum RejectReason {
     ExecutionFailure(String),
     PreviousQcRejection,
     ShardPledgedToAnotherPayload(String),
-    ShardRejected(String),
+    OtherShardRejected(String),
 }
 
 impl std::fmt::Display for RejectReason {
@@ -103,7 +113,7 @@ impl std::fmt::Display for RejectReason {
             RejectReason::ExecutionFailure(msg) => write!(f, "Execution failure: {}", msg),
             RejectReason::PreviousQcRejection => write!(f, "Previous QC was a rejection"),
             RejectReason::ShardPledgedToAnotherPayload(msg) => write!(f, "Shard pledged to another payload: {}", msg),
-            RejectReason::ShardRejected(msg) => write!(f, "Shard was rejected: {}", msg),
+            RejectReason::OtherShardRejected(msg) => write!(f, "Shard was rejected: {}", msg),
         }
     }
 }
