@@ -1,10 +1,9 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
-use std::convert::TryFrom;
+use std::borrow::Borrow;
 
-use tari_common_types::types::{PrivateKey, PublicKey};
-use tari_crypto::{keys::PublicKey as PublicKeyTrait, ristretto::RistrettoPublicKey};
+use tari_common_types::types::PrivateKey;
 use tari_dan_common_types::ShardId;
 use tari_engine_types::{
     confidential::ConfidentialClaim,
@@ -15,35 +14,19 @@ use tari_engine_types::{
 use tari_template_lib::{
     args,
     args::Arg,
-    models::{
-        Amount,
-        ComponentAddress,
-        ConfidentialWithdrawProof,
-        NonFungibleAddress,
-        NonFungibleId,
-        NonFungibleIndexAddress,
-        ResourceAddress,
-    },
+    models::{Amount, ComponentAddress, ConfidentialWithdrawProof},
 };
 
-use super::Transaction;
-use crate::{
-    change::SubstateChange,
-    id_provider::IdProvider,
-    transaction::TransactionMeta,
-    InstructionSignature,
-    ObjectClaim,
-};
+use crate::{Transaction, TransactionSignature};
 
 #[derive(Debug, Clone, Default)]
 pub struct TransactionBuilder {
     instructions: Vec<Instruction>,
     fee_instructions: Vec<Instruction>,
-    meta: TransactionMeta,
-    signature: Option<InstructionSignature>,
-    sender_public_key: Option<RistrettoPublicKey>,
-    new_non_fungible_outputs: Vec<(ResourceAddress, u8)>,
-    new_non_fungible_index_outputs: Vec<(ResourceAddress, u64)>,
+    signature: Option<TransactionSignature>,
+    inputs: Vec<ShardId>,
+    input_refs: Vec<ShardId>,
+    outputs: Vec<ShardId>,
 }
 
 impl TransactionBuilder {
@@ -52,10 +35,9 @@ impl TransactionBuilder {
             instructions: Vec::new(),
             fee_instructions: Vec::new(),
             signature: None,
-            sender_public_key: None,
-            meta: TransactionMeta::default(),
-            new_non_fungible_outputs: vec![],
-            new_non_fungible_index_outputs: vec![],
+            inputs: Vec::new(),
+            input_refs: Vec::new(),
+            outputs: Vec::new(),
         }
     }
 
@@ -132,134 +114,82 @@ impl TransactionBuilder {
         self
     }
 
-    pub fn with_signature(mut self, signature: InstructionSignature) -> Self {
+    pub fn with_signature(mut self, signature: TransactionSignature) -> Self {
         self.signature = Some(signature);
         self
     }
 
-    pub fn with_sender_public_key(mut self, sender_public_key: RistrettoPublicKey) -> Self {
-        self.sender_public_key = Some(sender_public_key);
-        self
-    }
-
     pub fn sign(mut self, secret_key: &PrivateKey) -> Self {
-        self.signature = Some(InstructionSignature::sign(secret_key, &self.instructions));
-        self.sender_public_key = Some(PublicKey::from_secret_key(secret_key));
+        // TODO: create proper challenge that signs everything
+        self.signature = Some(TransactionSignature::sign(secret_key, &self.instructions));
         self
     }
 
     /// Add an input to be consumed
     pub fn add_input(mut self, input_object: ShardId) -> Self {
-        self.meta
-            .involved_objects_mut()
-            .insert(input_object, (SubstateChange::Destroy, ObjectClaim {}));
+        self.inputs.push(input_object);
         self
     }
 
-    pub fn with_inputs(mut self, inputs: Vec<ShardId>) -> Self {
-        for input in inputs {
-            self = self.add_input(input);
-        }
+    pub fn with_substate_inputs<I: IntoIterator<Item = (B, u32)>, B: Borrow<SubstateAddress>>(self, inputs: I) -> Self {
+        self.with_inputs(inputs.into_iter().map(|(a, v)| ShardId::from_address(a.borrow(), v)))
+    }
+
+    pub fn with_inputs<I: IntoIterator<Item = ShardId>>(mut self, inputs: I) -> Self {
+        self.inputs.extend(inputs);
         self
     }
 
-    pub fn with_outputs(mut self, outputs: Vec<ShardId>) -> Self {
-        for output in outputs {
-            self = self.add_output(output);
-        }
+    /// Add an input to be used without mutation
+    pub fn add_input_ref(mut self, input_object: ShardId) -> Self {
+        self.input_refs.push(input_object);
+        self
+    }
+
+    pub fn with_substate_input_refs<I: IntoIterator<Item = (B, u32)>, B: Borrow<SubstateAddress>>(
+        self,
+        inputs: I,
+    ) -> Self {
+        self.with_input_refs(inputs.into_iter().map(|(a, v)| ShardId::from_address(a.borrow(), v)))
+    }
+
+    pub fn with_input_refs<I: IntoIterator<Item = ShardId>>(mut self, inputs: I) -> Self {
+        self.input_refs.extend(inputs);
         self
     }
 
     pub fn add_output(mut self, output_object: ShardId) -> Self {
-        self.meta
-            .involved_objects_mut()
-            .insert(output_object, (SubstateChange::Create, ObjectClaim {}));
+        self.outputs.push(output_object);
         self
     }
 
-    pub fn with_new_outputs(mut self, num_outputs: u8) -> Self {
-        self.meta.set_max_outputs(num_outputs.into());
-        self
-    }
-
-    pub fn with_new_non_fungible_outputs(mut self, new_non_fungible_outputs: Vec<(ResourceAddress, u8)>) -> Self {
-        self.new_non_fungible_outputs = new_non_fungible_outputs;
-        self
-    }
-
-    pub fn with_new_non_fungible_index_outputs(
-        mut self,
-        new_non_fungible_index_outputs: Vec<(ResourceAddress, u64)>,
+    pub fn with_substate_outputs<I: IntoIterator<Item = (B, u32)>, B: Borrow<SubstateAddress>>(
+        self,
+        outputs: I,
     ) -> Self {
-        self.new_non_fungible_index_outputs = new_non_fungible_index_outputs;
+        self.with_outputs(outputs.into_iter().map(|(a, v)| ShardId::from_address(a.borrow(), v)))
+    }
+
+    pub fn with_outputs<I: IntoIterator<Item = ShardId>>(mut self, outputs: I) -> Self {
+        self.outputs.extend(outputs);
+        self
+    }
+
+    pub fn add_output_ref(mut self, output_object: ShardId) -> Self {
+        self.outputs.push(output_object);
         self
     }
 
     pub fn build(mut self) -> Transaction {
-        let mut transaction = Transaction::new(
+        Transaction::new(
             self.fee_instructions.drain(..).collect(),
             self.instructions.drain(..).collect(),
             self.signature.take().expect("not signed"),
-            self.sender_public_key.take().expect("not signed"),
-            self.meta,
-        );
-
-        let max_outputs = transaction.meta().max_outputs();
-        let total_new_nft_outputs = self
-            .new_non_fungible_outputs
-            .iter()
-            .map(|(_, count)| u32::from(*count))
-            .sum::<u32>();
-        let id_provider = IdProvider::new(*transaction.hash(), max_outputs + total_new_nft_outputs);
-
-        transaction
-            .meta_mut()
-            .involved_objects_mut()
-            .extend((0..max_outputs).map(|_| {
-                let new_hash = id_provider
-                    .new_address_hash()
-                    .expect("id provider provides num_outputs IDs");
-                (
-                    ShardId::from_hash(&new_hash, 0),
-                    (SubstateChange::Create, ObjectClaim {}),
-                )
-            }));
-
-        let mut new_nft_outputs =
-            Vec::with_capacity(usize::try_from(total_new_nft_outputs).expect("too many new NFT outputs"));
-        for (resource_addr, count) in self.new_non_fungible_outputs {
-            new_nft_outputs.extend((0..count).map({
-                |_| {
-                    let new_hash = id_provider.new_uuid().expect("id provider provides num_outputs IDs");
-                    let address = NonFungibleAddress::new(resource_addr, NonFungibleId::from_u256(new_hash));
-                    let new_addr = SubstateAddress::NonFungible(address);
-                    (
-                        ShardId::from_hash(&new_addr.to_canonical_hash(), 0),
-                        (SubstateChange::Create, ObjectClaim {}),
-                    )
-                }
-            }));
-        }
-
-        transaction.meta_mut().involved_objects_mut().extend(new_nft_outputs);
-
-        // add the involved objects for NFT indexes
-        let new_nft_index_outputs: Vec<(ShardId, (SubstateChange, ObjectClaim))> = self
-            .new_non_fungible_index_outputs
-            .iter()
-            .map(|(res_addr, index)| {
-                let index_addr = NonFungibleIndexAddress::new(*res_addr, *index);
-                let substate_addr = SubstateAddress::NonFungibleIndex(index_addr);
-                let shard_id = ShardId::from_hash(&substate_addr.to_canonical_hash(), 0);
-
-                (shard_id, (SubstateChange::Create, ObjectClaim {}))
-            })
-            .collect();
-        transaction
-            .meta_mut()
-            .involved_objects_mut()
-            .extend(new_nft_index_outputs);
-
-        transaction
+            self.inputs,
+            self.input_refs,
+            self.outputs,
+            vec![],
+            vec![],
+        )
     }
 }

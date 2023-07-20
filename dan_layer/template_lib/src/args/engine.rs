@@ -41,8 +41,9 @@ use crate::{
         ResourceAddress,
         VaultRef,
     },
-    prelude::{AccessRules, ConfidentialOutputProof},
+    prelude::{AccessRules, ConfidentialOutputProof, TemplateAddress},
     resource::ResourceType,
+    Hash,
 };
 
 // -------------------------------- LOGS -------------------------------- //
@@ -129,9 +130,17 @@ impl ComponentRef {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct CreateComponentArg {
-    pub module_name: String,
     pub encoded_state: Vec<u8>,
     pub access_rules: AccessRules,
+    pub component_id: Option<Hash>,
+}
+
+// -------------------------------- Events -------------------------------- //
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct EmitEventArg {
+    pub topic: String,
+    pub payload: Metadata,
 }
 
 // -------------------------------- Resource -------------------------------- //
@@ -182,13 +191,14 @@ pub enum MintArg {
         tokens: HashMap<NonFungibleId, (Vec<u8>, Vec<u8>)>,
     },
     Confidential {
-        proof: ConfidentialOutputProof,
+        proof: Box<ConfidentialOutputProof>,
     },
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct CreateResourceArg {
     pub resource_type: ResourceType,
+    pub token_symbol: String,
     pub metadata: Metadata,
     pub mint_arg: Option<MintArg>,
 }
@@ -336,4 +346,53 @@ pub struct ConsensusInvokeArg {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub enum ConsensusAction {
     GetCurrentEpoch,
+}
+
+// -------------------------------- GenerateRandom -------------------------------- //
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct GenerateRandomInvokeArg {
+    pub action: GenerateRandomAction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum GenerateRandomAction {
+    GetRandomBytes { len: u32 },
+}
+
+// -------------------------------- CallerContext -------------------------------- //
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallerContextInvokeArg {
+    pub action: CallerContextAction,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub enum CallerContextAction {
+    GetCallerPublicKey,
+}
+
+// -------------------------------- CallInvoke -------------------------------- //
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallInvokeArg {
+    pub action: CallAction,
+    pub args: Vec<Vec<u8>>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum CallAction {
+    CallFunction,
+    CallMethod,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallFunctionArg {
+    pub template_address: TemplateAddress,
+    pub function: String,
+    pub args: Vec<Vec<u8>>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct CallMethodArg {
+    pub component_address: ComponentAddress,
+    pub method: String,
+    pub args: Vec<Vec<u8>>,
 }

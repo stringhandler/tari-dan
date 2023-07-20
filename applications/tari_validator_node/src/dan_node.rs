@@ -20,16 +20,20 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use log::*;
-use tari_comms::{connectivity::ConnectivityEvent, peer_manager::NodeId};
-use tari_dan_core::{
-    services::epoch_manager::{EpochManager, EpochManagerError},
-    workers::events::HotStuffEvent,
-};
-use tari_shutdown::ShutdownSignal;
-use tari_template_lib::Hash;
+use std::time::Duration;
 
-use crate::{p2p::services::networking::NetworkingService, Services};
+use log::*;
+use tari_comms::{connection_manager::LivenessStatus, connectivity::ConnectivityEvent, peer_manager::NodeId};
+use tari_consensus::hotstuff::HotstuffEvent;
+use tari_dan_storage::{consensus_models::Block, StateStore};
+use tari_epoch_manager::{EpochManagerError, EpochManagerEvent, EpochManagerReader};
+use tari_shutdown::ShutdownSignal;
+use tokio::{task, time, time::MissedTickBehavior};
+
+use crate::{
+    p2p::services::{committee_state_sync::CommitteeStateSync, networking::NetworkingService},
+    Services,
+};
 
 const LOG_TARGET: &str = "tari::validator_node::dan_node";
 
@@ -56,6 +60,12 @@ impl DanNode {
             self.services.networking.announce().await?;
         }
 
+        let mut current_inbound_status = self.services.comms.liveness_status();
+        let mut tick = time::interval(Duration::from_secs(10));
+        tick.set_missed_tick_behavior(MissedTickBehavior::Skip);
+
+        let mut epoch_manager_events = self.services.epoch_manager.subscribe().await?;
+
         loop {
             tokio::select! {
                 // Wait until killed
@@ -72,23 +82,90 @@ impl DanNode {
                     }
                 },
 
-                Ok(event) = hotstuff_events.recv() => {
-                    if let HotStuffEvent::OnFinalized(qc, _) = event {
-                        let transaction_hash = Hash::from(qc.payload_id().into_array());
-                        info!(target: LOG_TARGET, "🏁 Removing finalized transaction {} from mempool", transaction_hash);
-                        if let Err(err) = self.services.mempool.remove_transaction(transaction_hash).await {
-                            error!(target: LOG_TARGET, "Failed to remove transaction from mempool: {}", err);
-                        }
-                    }
+                Ok(event) = hotstuff_events.recv() => if let Err(err) = self.handle_hotstuff_event(event).await{
+                    error!(target: LOG_TARGET, "Error handling hotstuff event: {}", err);
+                },
+
+                Ok(event) = epoch_manager_events.recv() => {
+                    self.handle_epoch_manager_event(event).await?;
                 }
 
                 Err(err) = self.services.on_any_exit() => {
                     error!(target: LOG_TARGET, "Error in service: {}", err);
                     return Err(err);
                 }
+
+                _ = tick.tick() => {
+                    let status = self.services.comms.liveness_status() ;
+                    match status {
+                        LivenessStatus::Disabled | LivenessStatus::Checking => {},
+                        LivenessStatus::Unreachable => { warn!(target: LOG_TARGET, "🔌 Node is unreachable"); }
+                        LivenessStatus::Live(t) => {
+                            if !matches!(current_inbound_status, LivenessStatus::Live(_)) {
+                                info!(target: LOG_TARGET, "⚡️ Node is reachable (ping {:.2?})", t);
+                            }
+                        }
+                    }
+                    current_inbound_status = status;
+                }
             }
         }
 
+        Ok(())
+    }
+
+    async fn handle_hotstuff_event(&self, event: HotstuffEvent) -> Result<(), anyhow::Error> {
+        let HotstuffEvent::BlockCommitted { block_id } = event else {
+            return Ok(());
+        };
+
+        let committed_transactions = self.services.state_store.with_read_tx(|tx| {
+            let block = Block::get(tx, &block_id)?;
+            info!(target: LOG_TARGET, "🏁 Block {} committed", block_id);
+            Ok::<_, anyhow::Error>(
+                block
+                    .commands()
+                    .iter()
+                    .filter_map(|cmd| cmd.accept())
+                    .map(|t| t.id)
+                    .collect::<Vec<_>>(),
+            )
+        })?;
+
+        for tx_id in committed_transactions {
+            info!(target: LOG_TARGET, "🏁 Removing finalized transaction {} from mempool", tx_id);
+            if let Err(err) = self.services.mempool.remove_transaction(tx_id).await {
+                error!(target: LOG_TARGET, "Failed to remove transaction from mempool: {}", err);
+            }
+        }
+
+        Ok(())
+    }
+
+    async fn handle_epoch_manager_event(&self, event: EpochManagerEvent) -> Result<(), anyhow::Error> {
+        match event {
+            EpochManagerEvent::EpochChanged(epoch) => {
+                info!(target: LOG_TARGET, "📅 Epoch changed to {}", epoch);
+                let sync_service = CommitteeStateSync::new(
+                    self.services.epoch_manager.clone(),
+                    self.services.validator_node_client_factory.clone(),
+                    self.services.state_store.clone(),
+                    self.services.global_db.clone(),
+                    self.services.comms.node_identity().public_key().clone(),
+                );
+
+                // EpochChanged should only happen once per epoch and the event is not emitted during initial sync. So
+                // spawning state sync for each event should be ok.
+                task::spawn(async move {
+                    if let Err(e) = sync_service.sync_state(epoch).await {
+                        error!(
+                            target: LOG_TARGET,
+                            "Failed to sync peers state for epoch {}: {}", epoch, e
+                        );
+                    }
+                });
+            },
+        }
         Ok(())
     }
 
@@ -97,11 +174,15 @@ impl DanNode {
         let res = self
             .services
             .epoch_manager
-            .get_validator_shard_key(epoch, self.services.comms.node_identity().public_key().clone())
+            .get_validator_node(epoch, self.services.comms.node_identity().public_key())
             .await;
 
         let shard_id = match res {
-            Ok(shard_id) => shard_id,
+            Ok(vn) => vn.shard_key,
+            Err(EpochManagerError::ValidatorNodeNotRegistered) => {
+                info!(target: LOG_TARGET, "Validator node registered for this epoch");
+                return Ok(());
+            },
             Err(EpochManagerError::BaseLayerConsensusConstantsNotSet) => {
                 info!(target: LOG_TARGET, "Epoch manager has not synced with base layer yet");
                 return Ok(());

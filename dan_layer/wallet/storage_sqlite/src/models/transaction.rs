@@ -4,10 +4,13 @@
 use std::str::FromStr;
 
 use chrono::NaiveDateTime;
+use serde::{Deserialize, Serialize};
+use tari_dan_common_types::ShardId;
 use tari_dan_wallet_sdk::{
     models::{TransactionStatus, WalletTransaction},
     storage::WalletStorageError,
 };
+use tari_transaction::TransactionSignature;
 use tari_utilities::hex::Hex;
 
 use crate::{schema::transactions, serialization::deserialize_json};
@@ -19,7 +22,7 @@ pub struct Transaction {
     pub hash: String,
     pub instructions: String,
     pub signature: String,
-    pub sender_address: String,
+    pub sender_public_key: String,
     pub fee_instructions: String,
     pub meta: String,
     pub result: Option<String>,
@@ -32,22 +35,40 @@ pub struct Transaction {
     pub created_at: NaiveDateTime,
 }
 
+/// Struct used to keep inputs and outputs in a single field as json
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct InputsAndOutputs {
+    pub inputs: Vec<ShardId>,
+    pub input_refs: Vec<ShardId>,
+    pub outputs: Vec<ShardId>,
+}
+
 impl Transaction {
     pub fn try_into_wallet_transaction(self) -> Result<WalletTransaction, WalletStorageError> {
         let signature = deserialize_json(&self.signature)?;
-        let sender_address = Hex::from_hex(&self.sender_address).map_err(|e| WalletStorageError::DecodingError {
-            operation: "transaction_get",
-            item: "sender_address",
-            details: e.to_string(),
-        })?;
+        let sender_public_key =
+            Hex::from_hex(&self.sender_public_key).map_err(|e| WalletStorageError::DecodingError {
+                operation: "transaction_get",
+                item: "sender_address",
+                details: e.to_string(),
+            })?;
+        let signature = TransactionSignature::new(sender_public_key, signature);
+        let InputsAndOutputs {
+            inputs,
+            input_refs,
+            outputs,
+        } = deserialize_json(&self.meta)?;
 
         Ok(WalletTransaction {
             transaction: tari_transaction::Transaction::new(
                 deserialize_json(&self.fee_instructions)?,
                 deserialize_json(&self.instructions)?,
                 signature,
-                sender_address,
-                deserialize_json(&self.meta)?,
+                inputs,
+                input_refs,
+                outputs,
+                vec![],
+                vec![],
             ),
             status: TransactionStatus::from_str(&self.status).map_err(|e| WalletStorageError::DecodingError {
                 operation: "transaction_get",

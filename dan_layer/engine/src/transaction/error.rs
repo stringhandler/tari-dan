@@ -20,6 +20,7 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use tari_engine_types::indexed_value::IndexedValueVisitorError;
 use tari_template_lib::models::TemplateAddress;
 use tari_utilities::ByteArrayError;
 
@@ -35,4 +36,14 @@ pub enum TransactionError {
     RuntimeError(#[from] RuntimeError),
     #[error(transparent)]
     ByteArrayError(#[from] ByteArrayError),
+    #[error(transparent)]
+    FlowEngineError(#[from] crate::flow::FlowEngineError),
+    #[error("Recursion limit exceeded")]
+    RecursionLimitExceeded,
+    #[error("Failed to load template '{address}': {details}")]
+    FailedToLoadTemplate { address: TemplateAddress, details: String },
+    #[error("BOR error: {0}")]
+    BorError(#[from] tari_bor::BorError),
+    #[error("Value visitor error: {0}")]
+    ValueVisitorError(#[from] IndexedValueVisitorError),
 }

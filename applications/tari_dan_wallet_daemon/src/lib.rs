@@ -21,59 +21,90 @@
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 pub mod cli;
+pub mod config;
 mod handlers;
+mod http_ui;
+mod indexer_jrpc_impl;
 mod jrpc_server;
 mod notify;
 mod services;
+mod webrtc;
 
-use std::{error::Error, panic, process};
+use std::{fs, panic, process};
 
+use log::*;
 use tari_dan_wallet_sdk::{apis::key_manager, DanWalletSdk, WalletSdkConfig};
 use tari_dan_wallet_storage_sqlite::SqliteWalletStore;
 use tari_shutdown::ShutdownSignal;
+use tari_template_lib::models::Amount;
+use tokio::task;
 
-use crate::{cli::Cli, handlers::HandlerContext, notify::Notify, services::spawn_services};
+use crate::{
+    config::ApplicationConfig,
+    handlers::HandlerContext,
+    http_ui::server::run_http_ui_server,
+    indexer_jrpc_impl::IndexerJsonRpcNetworkInterface,
+    notify::Notify,
+    services::spawn_services,
+};
 
-const _LOG_TARGET: &str = "tari::dan_wallet_daemon::main";
+const LOG_TARGET: &str = "tari::dan::wallet_daemon";
 
-pub async fn run_tari_dan_wallet_daemon(cli: Cli, shutdown_signal: ShutdownSignal) -> Result<(), Box<dyn Error>> {
+const DEFAULT_FEE: Amount = Amount::new(1000);
+
+pub async fn run_tari_dan_wallet_daemon(
+    config: ApplicationConfig,
+    shutdown_signal: ShutdownSignal,
+) -> Result<(), anyhow::Error> {
     // Uncomment to enable tokio tracing via tokio-console
     // console_subscriber::init();
 
-    // Setup a panic hook which prints the default rust panic message but also exits the process. This makes a panic in
-    // any thread "crash" the system instead of silently continuing.
-    let default_hook = panic::take_hook();
-    panic::set_hook(Box::new(move |info| {
-        default_hook(info);
-        process::exit(1);
-    }));
-
-    let store = SqliteWalletStore::try_open(cli.base_dir().join("data/wallet.sqlite"))?;
+    let store = SqliteWalletStore::try_open(config.common.base_path.join("data/wallet.sqlite"))?;
     store.run_migrations()?;
 
-    let params = WalletSdkConfig {
+    let sdk_config = WalletSdkConfig {
         // TODO: Configure
         password: None,
-        validator_node_jrpc_endpoint: cli.validator_node_endpoint(),
+        indexer_jrpc_endpoint: config.dan_wallet_daemon.indexer_node_json_rpc_url,
+        jwt_expiry: config.dan_wallet_daemon.jwt_expiry.unwrap(),
+        jwt_secret_key: config.dan_wallet_daemon.jwt_secret_key.unwrap(),
     };
-    let wallet_sdk = DanWalletSdk::initialize(store, params)?;
+    let indexer = IndexerJsonRpcNetworkInterface::new(&sdk_config.indexer_jrpc_endpoint);
+    let wallet_sdk = DanWalletSdk::initialize(store, indexer, sdk_config)?;
     wallet_sdk
         .key_manager_api()
         .get_or_create_initial(key_manager::TRANSACTION_BRANCH)?;
     let notify = Notify::new(100);
 
-    let service_handles = spawn_services(shutdown_signal.clone(), notify.clone(), wallet_sdk.clone());
+    let services = spawn_services(shutdown_signal.clone(), notify.clone(), wallet_sdk.clone());
 
-    let address = cli.listen_address();
-    let handlers = HandlerContext::new(wallet_sdk.clone(), notify);
-    let listen_fut = jrpc_server::listen(address, handlers, shutdown_signal);
+    let address = config.dan_wallet_daemon.json_rpc_address.unwrap();
+    let signaling_server_address = config.dan_wallet_daemon.signaling_server_address.unwrap();
+    let handlers = HandlerContext::new(wallet_sdk.clone(), notify, services.account_monitor_handle.clone());
+    let listen_fut = jrpc_server::listen(address, signaling_server_address, handlers, shutdown_signal);
 
+    // Run the http ui
+    if let Some(http_address) = config.dan_wallet_daemon.http_ui_address {
+        task::spawn(run_http_ui_server(
+            http_address,
+            config.dan_wallet_daemon.ui_connect_address.unwrap_or(address),
+        ));
+    }
+
+    if let Err(e) = fs::write(config.common.base_path.join("pid"), process::id().to_string()) {
+        error!(
+            target: LOG_TARGET,
+            "Failed to create PID file {}: {}",
+            config.common.base_path.join("pid").display(),
+            e
+        )
+    }
     // Wait for shutdown, or for any service to error
     tokio::select! {
         res = listen_fut => {
             res?;
         },
-        res = service_handles => {
+        res = services.services_fut => {
             res?;
         },
     }

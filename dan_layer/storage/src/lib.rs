@@ -24,3 +24,11 @@ mod atomic;
 pub use atomic::AtomicDb;
 
 pub mod global;
+
+mod error;
+pub use error::StorageError;
+
+pub mod consensus_models;
+
+mod state_store;
+pub use state_store::*;

@@ -25,9 +25,9 @@ use tari_bor::{decode_exact, encode};
 use tari_template_abi::{call_engine, EngineOp};
 
 use crate::{
-    args::{ComponentAction, ComponentInvokeArg, ComponentRef, InvokeResult},
+    args::{CallAction, CallInvokeArg, CallMethodArg, ComponentAction, ComponentInvokeArg, ComponentRef, InvokeResult},
     auth::AccessRules,
-    models::{ComponentAddress, ComponentHeader},
+    models::ComponentAddress,
 };
 
 pub struct ComponentManager {
@@ -39,6 +39,29 @@ impl ComponentManager {
         Self { address }
     }
 
+    pub fn get(address: ComponentAddress) -> Self {
+        Self { address }
+    }
+
+    pub fn call<T: DeserializeOwned>(&self, method: String, args: Vec<Vec<u8>>) -> T {
+        self.call_internal(CallMethodArg {
+            component_address: self.address,
+            method,
+            args,
+        })
+    }
+
+    fn call_internal<T: DeserializeOwned>(&self, arg: CallMethodArg) -> T {
+        let result = call_engine::<_, InvokeResult>(EngineOp::CallInvoke, &CallInvokeArg {
+            action: CallAction::CallMethod,
+            args: invoke_args![arg],
+        });
+
+        result
+            .decode()
+            .expect("failed to decode component call result from engine")
+    }
+
     /// Get the component state
     pub fn get_state<T: DeserializeOwned>(&self) -> T {
         let result = call_engine::<_, InvokeResult>(EngineOp::ComponentInvoke, &ComponentInvokeArg {
@@ -47,8 +70,8 @@ impl ComponentManager {
             args: invoke_args![],
         });
 
-        let component: ComponentHeader = result.decode().expect("failed to decode component header from engine");
-        decode_exact(component.state()).expect("Failed to decode component state")
+        let component: Vec<u8> = result.decode().expect("failed to decode component state from engine");
+        decode_exact(&component).expect("Failed to decode component state")
     }
 
     pub fn set_state<T: Serialize>(&self, state: T) {

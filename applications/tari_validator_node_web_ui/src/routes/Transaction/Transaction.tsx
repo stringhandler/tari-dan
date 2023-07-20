@@ -20,19 +20,22 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import {useEffect, useState} from 'react';
-import { Form, useLoaderData } from 'react-router-dom';
-import { getSubstates, getTransaction, getCurrentLeaderState } from '../../utils/json_rpc';
+import { useEffect, useState } from 'react';
+import { useLoaderData } from 'react-router-dom';
 import {
-  fromHexString,
-  toHexString,
-  shortenString,
-} from '../VN/Components/helpers';
+  getSubstates,
+  getTransaction,
+} from '../../utils/json_rpc';
+import { toHexString } from '../VN/Components/helpers';
 import Output from './Components/Output';
 import Substates from './Components/Substates';
 import './Transaction.css';
 import mermaid from 'mermaid';
-import {AccordionIconButton, CodeBlock, StyledPaper} from '../../Components/StyledComponents';
+import {
+  AccordionIconButton,
+  CodeBlock,
+  StyledPaper,
+} from '../../Components/StyledComponents';
 import PageHeading from '../../Components/PageHeading';
 import Typography from '@mui/material/Typography';
 import Grid from '@mui/material/Grid';
@@ -43,13 +46,18 @@ import TableCell from '@mui/material/TableCell';
 import TableContainer from '@mui/material/TableContainer';
 import TableHead from '@mui/material/TableHead';
 import TableRow from '@mui/material/TableRow';
-import TablePagination from '@mui/material/TablePagination';
-import {renderJson} from "../../utils/helpers";
-import Collapse from "@mui/material/Collapse";
-import KeyboardArrowUpIcon from "@mui/icons-material/KeyboardArrowUp";
-import KeyboardArrowDownIcon from "@mui/icons-material/KeyboardArrowDown";
+import { renderJson } from '../../utils/helpers';
+import Collapse from '@mui/material/Collapse';
+import KeyboardArrowUpIcon from '@mui/icons-material/KeyboardArrowUp';
+import KeyboardArrowDownIcon from '@mui/icons-material/KeyboardArrowDown';
 
-type loaderData = [string, Map<string, any[]>, Map<string, any[]>, Map<string, [string, number, string]>, any];
+type loaderData = [
+  string,
+  Map<string, any[]>,
+  Map<string, any[]>,
+  Map<string, [string, number, string]>,
+  any
+];
 
 mermaid.initialize({
   startOnLoad: true,
@@ -73,26 +81,34 @@ function splitToOutputs(transaction: any) {
     }
     shard_transactions.get(shard)?.push(tx);
   }
-  return { payload: transaction.payload, outputs:  shard_transactions };
+  return { payload: transaction.payload, outputs: shard_transactions };
 }
 
 function splitToShards(current_leader_states: any[]) {
   let states = new Map<string, [string, number, string]>();
   for (let current_leader_state of current_leader_states) {
     let shard = toHexString(current_leader_state.shard_id);
-    states.set(shard, [toHexString(current_leader_state.leader), current_leader_state.leader_round,current_leader_state.timestamp]);
+    states.set(shard, [
+      toHexString(current_leader_state.leader),
+      current_leader_state.leader_round,
+      current_leader_state.timestamp,
+    ]);
   }
   return states;
 }
 
 export async function transactionLoader({ params }: { params: any }) {
-  const { payload, outputs } = splitToOutputs(await getTransaction(params.payloadId));
-  const current_leader_states = splitToShards(await getCurrentLeaderState(params.payloadId));
+  const { payload, outputs } = splitToOutputs(
+    await getTransaction(params.payloadId)
+  );
+  // TODO: Fix these
+  const current_leader_states =
+      new Map<string, [string, number, string]>();
   let substates = new Map<string, any[]>();
-
+  let substates_resp  = await getSubstates(params.payloadId);
   await Promise.all(
     Array.from(outputs.entries()).map(async ([shard, _]) => {
-      substates.set(shard, await getSubstates(params.payloadId, shard));
+      substates.set(shard, substates_resp.find((s: any) => s.shard_id === shard));
     })
   );
   return [params.payloadId, substates, outputs, current_leader_states, payload];
@@ -116,13 +132,15 @@ function mapHeight(height: number) {
 export default function Transaction() {
   const [open1, setOpen1] = useState(false);
   const [open2, setOpen2] = useState(false);
-const [payloadId, substates, outputs, current_leader_states, payload] = useLoaderData() as loaderData;
+  const [payloadId, substates, outputs, current_leader_states, payload] =
+    useLoaderData() as loaderData;
   console.log('Substates: ', substates);
   console.log('Outputs: ', outputs);
   console.log('Current states: ', current_leader_states);
-  console.log("Payload:", payload);
+  console.log('Payload:', payload);
   let mermaid = 'gantt\ndateFormat YYYY-MM-DDTHH:mm:ss\naxisFormat  %Hh%M:%S';
   let shardNo = 0;
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
   for (let [shard, output] of Array.from(outputs.entries())) {
     mermaid += `\nsection shard_${shardNo}`;
     for (let node of output) {
@@ -145,90 +163,62 @@ const [payloadId, substates, outputs, current_leader_states, payload] = useLoade
 
   return (
     <>
-      <Grid container spacing={5}>
-        <Grid item xs={12} md={12} lg={12}>
-          <PageHeading>Payload ID</PageHeading>
-          <Typography variant="h5" sx={{ mt: 4, mb: 4, textAlign: 'center' }}>
-            {payloadId}
-          </Typography>
-        </Grid>
-        <Grid item xs={12} md={12} lg={12}>
-          <StyledPaper>
-            <Typography>
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Instructions
-                        <AccordionIconButton
-                            open={open1}
-                            aria-label="expand row"
-                            size="small"
-                            onClick={() => {
-                              setOpen1(!open1);
-                            }}
-                        >
-                          {open1 ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
-                        </AccordionIconButton>
-                      </TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {payload?.transaction?.instructions.map((instruction: any, index: number) => {
-                      const key = Object.keys(instruction)[0];
-                      return (
+      <Grid item xs={12} md={12} lg={12}>
+        <PageHeading>Payload ID</PageHeading>
+        <Typography variant="h5" sx={{ mt: 4, mb: 4, textAlign: 'center' }}>
+          {payloadId}
+        </Typography>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <StyledPaper>
+          <Typography>
+            <TableContainer>
+              <Table>
+                <TableHead>
+                  <TableRow>
+                    <TableCell>
+                      Instructions
+                      <AccordionIconButton
+                        open={open1}
+                        aria-label="expand row"
+                        size="small"
+                        onClick={() => {
+                          setOpen1(!open1);
+                        }}
+                      >
+                        {open1 ? (
+                          <KeyboardArrowUpIcon />
+                        ) : (
+                          <KeyboardArrowDownIcon />
+                        )}
+                      </AccordionIconButton>
+                    </TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {payload?.transaction?.instructions.map(
+                    (instruction: any, index: number) => {
+                      if (instruction.length > 0) {
+                        const key = Object.keys(instruction)[0];
+                        return (
                           <TableRow key={index}>
                             <TableCell>
                               <Typography>
-                                {key}: {instruction[key].template_address || (instruction[key].component_address ?  instruction[key].component_address["@@TAGGED@@"][1]  : "") }:{instruction[key].function || instruction[key].method}
-                                <Collapse in={open1} timeout="auto" unmountOnExit>
-                                  <CodeBlock style={{marginBottom: '10px'}}>
-                                    <pre>{renderJson(instruction)}</pre>
-                                  </CodeBlock>
-                                </Collapse>
-                              </Typography>
-                            </TableCell>
-                          </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Typography>
-          </StyledPaper>
-        </Grid>
-
-        <Grid item xs={12} md={12} lg={12}>
-          <StyledPaper>
-            <Typography>
-              <TableContainer>
-                <Table>
-                  <TableHead>
-                    <TableRow>
-                      <TableCell>Fee Instructions
-                        <AccordionIconButton
-                            open={open2}
-                            aria-label="expand row"
-                            size="small"
-                            onClick={() => {
-                              setOpen2(!open2);
-                            }}
-                        >
-                          {open2 ? <KeyboardArrowUpIcon /> : <KeyboardArrowDownIcon />}
-                        </AccordionIconButton>
-                      </TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {payload?.transaction?.fee_instructions.map((instruction: any, index: number) => {
-
-                      const key =Object.keys(instruction)[0];
-                      return (
-                          <TableRow key={index}>
-                            <TableCell>
-                              <Typography>
-                                {key}: {instruction[key].template_address || (instruction[key].component_address ?  instruction[key].component_address["@@TAGGED@@"][1]  : "")  }:{ instruction[key].function || instruction[key].method }
-                                <Collapse in={open2} timeout="auto" unmountOnExit>
+                                {key}:{' '}
+                                {instruction[key].template_address ||
+                                  (instruction[key].component_address
+                                    ? instruction[key].component_address[
+                                        '@@TAGGED@@'
+                                      ][1]
+                                    : '')}
+                                :
+                                {instruction[key].function ||
+                                  instruction[key].method}
+                                <Collapse
+                                  in={open1}
+                                  timeout="auto"
+                                  unmountOnExit
+                                >
                                   <CodeBlock style={{ marginBottom: '10px' }}>
                                     <pre>{renderJson(instruction)}</pre>
                                   </CodeBlock>
@@ -236,62 +226,144 @@ const [payloadId, substates, outputs, current_leader_states, payload] = useLoade
                               </Typography>
                             </TableCell>
                           </TableRow>
-                      );
-                    })}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Typography>
-          </StyledPaper>
-        </Grid>
-        <Grid item xs={12} md={12} lg={12}>
-          <StyledPaper>
-            <Typography>
-              <strong>Outputs :</strong> {outputs?.size}
-            </Typography>
-            <Mermaid chart={mermaid} />
-          </StyledPaper>
-        </Grid>
-        <SecondaryHeading>Substates</SecondaryHeading>
-        <Grid item xs={12} md={12} lg={12}>
-          <StyledPaper>
+                        );
+                      } else {
+                        return <></>;
+                      }
+                    }
+                  )}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          </Typography>
+        </StyledPaper>
+      </Grid>
+
+      <Grid item xs={12} md={12} lg={12}>
+        <StyledPaper>
+          <Typography>
             <TableContainer>
               <Table>
                 <TableHead>
                   <TableRow>
-                    <TableCell>Shard</TableCell>
-                    <TableCell>Address</TableCell>
-                    <TableCell style={{ textAlign: 'center', width: '120px' }}>
-                      Data
-                    </TableCell>
-                    <TableCell style={{ textAlign: 'center', width: '120px' }}>
-                      Created
-                    </TableCell>
-                    <TableCell style={{ textAlign: 'center', width: '120px' }}>
-                      Destroyed
+                    <TableCell>
+                      Fee Instructions
+                      <AccordionIconButton
+                        open={open2}
+                        aria-label="expand row"
+                        size="small"
+                        onClick={() => {
+                          setOpen2(!open2);
+                        }}
+                      >
+                        {open2 ? (
+                          <KeyboardArrowUpIcon />
+                        ) : (
+                          <KeyboardArrowDownIcon />
+                        )}
+                      </AccordionIconButton>
                     </TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {Array.from(outputs.entries()).map(([shard]) => (
-                    <Substates substates={substates.get(shard)} />
-                  ))}
+                  {payload?.transaction?.fee_instructions.map(
+                    (instruction: any, index: number) => {
+                      if (instruction.length > 0) {
+                        const key = Object.keys(instruction)[0];
+                        return (
+                          <TableRow key={index}>
+                            <TableCell>
+                              <Typography>
+                                {key}:{' '}
+                                {instruction[key].template_address ||
+                                  (instruction[key].component_address
+                                    ? instruction[key].component_address[
+                                        '@@TAGGED@@'
+                                      ][1]
+                                    : '')}
+                                :
+                                {instruction[key].function ||
+                                  instruction[key].method}
+                                <Collapse
+                                  in={open2}
+                                  timeout="auto"
+                                  unmountOnExit
+                                >
+                                  <CodeBlock style={{ marginBottom: '10px' }}>
+                                    <pre>{renderJson(instruction)}</pre>
+                                  </CodeBlock>
+                                </Collapse>
+                              </Typography>
+                            </TableCell>
+                          </TableRow>
+                        );
+                      } else {
+                        return <></>;
+                      }
+                    }
+                  )}
                 </TableBody>
               </Table>
             </TableContainer>
-          </StyledPaper>
-        </Grid>
-        <SecondaryHeading>Shards</SecondaryHeading>
-        {Array.from(outputs.entries()).map(([shard, output]) => (
-          <>
-            <Grid item xs={12} md={12} lg={12}>
-              <StyledPaper>
-                <Output key={shard} shard={shard} output={output} current_state={current_leader_states.get(shard)}/>
-              </StyledPaper>
-            </Grid>
-          </>
-        ))}
+          </Typography>
+        </StyledPaper>
       </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <StyledPaper>
+          <Typography>
+            <strong>Outputs :</strong> {outputs?.size}
+          </Typography>
+          <Mermaid chart={mermaid} />
+        </StyledPaper>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Substates</SecondaryHeading>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <StyledPaper>
+          <TableContainer>
+            <Table>
+              <TableHead>
+                <TableRow>
+                  <TableCell>Shard</TableCell>
+                  <TableCell>Address</TableCell>
+                  <TableCell style={{ textAlign: 'center', width: '120px' }}>
+                    Data
+                  </TableCell>
+                  <TableCell style={{ textAlign: 'center', width: '120px' }}>
+                    Created
+                  </TableCell>
+                  <TableCell style={{ textAlign: 'center', width: '120px' }}>
+                    Destroyed
+                  </TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {Array.from(outputs.entries()).map(([shard]) => (
+                  <Substates substates={substates.get(shard)} />
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </StyledPaper>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Shards</SecondaryHeading>
+      </Grid>
+      {Array.from(outputs.entries()).map(([shard, output]) => (
+        <>
+          <Grid item xs={12} md={12} lg={12}>
+            <StyledPaper>
+              <Output
+                key={shard}
+                shard={shard}
+                output={output}
+                current_state={current_leader_states.get(shard)}
+              />
+            </StyledPaper>
+          </Grid>
+        </>
+      ))}
     </>
   );
 }

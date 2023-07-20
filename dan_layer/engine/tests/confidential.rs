@@ -29,17 +29,17 @@ fn setup(initial_supply: ConfidentialOutputProof) -> (TemplateTest, ComponentAdd
 
 #[test]
 fn mint_initial_commitment() {
-    let (confidential_proof, _mask, _change) = generate_confidential_proof(Amount::new(100), None);
+    let (confidential_proof, _mask, _change) = generate_confidential_proof(Amount(100), None);
     let (mut template_test, faucet, _faucet_resx) = setup(confidential_proof);
 
     let total_supply: Amount = template_test.call_method(faucet, "total_supply", args![], vec![]);
     // The number of commitments
-    assert_eq!(total_supply, Amount::new(0));
+    assert_eq!(total_supply, Amount(0));
 }
 
 #[test]
 fn transfer_confidential_amounts_between_accounts() {
-    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount::new(100_000), None);
+    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount(100_000), None);
     let (mut template_test, faucet, faucet_resx) = setup(confidential_proof);
 
     // Create an account
@@ -47,12 +47,7 @@ fn transfer_confidential_amounts_between_accounts() {
     let (account2, _owner2, _k) = template_test.create_owned_account();
 
     // Create proof for transfer
-    let proof = generate_withdraw_proof(
-        &faucet_mask,
-        Amount::new(1000),
-        Some(Amount::new(99_000)),
-        Amount::new(0),
-    );
+    let proof = generate_withdraw_proof(&faucet_mask, Amount(1000), Some(Amount(99_000)), Amount(0));
 
     // Transfer faucet funds into account 1
     let vars = [
@@ -79,21 +74,11 @@ fn transfer_confidential_amounts_between_accounts() {
     assert_eq!(diff.down_iter().filter(|(addr, _)| *addr == account1).count(), 1);
     assert_eq!(diff.up_iter().filter(|(addr, _)| *addr == faucet).count(), 1);
     assert_eq!(diff.down_iter().filter(|(addr, _)| *addr == faucet).count(), 1);
-    assert_eq!(diff.up_iter().count(), 4);
+    assert_eq!(diff.up_iter().count(), 5);
     assert_eq!(diff.down_iter().count(), 3);
 
-    let withdraw_proof = generate_withdraw_proof(
-        &proof.output_mask,
-        Amount::new(100),
-        Some(Amount::new(900)),
-        Amount::new(0),
-    );
-    let split_proof = generate_withdraw_proof(
-        &withdraw_proof.output_mask,
-        Amount::new(20),
-        Some(Amount::new(80)),
-        Amount::new(0),
-    );
+    let withdraw_proof = generate_withdraw_proof(&proof.output_mask, Amount(100), Some(Amount(900)), Amount(0));
+    let split_proof = generate_withdraw_proof(&withdraw_proof.output_mask, Amount(20), Some(Amount(80)), Amount(0));
 
     let vars = [
         ("faucet_resx", faucet_resx.into()),
@@ -130,25 +115,20 @@ fn transfer_confidential_amounts_between_accounts() {
     assert_eq!(diff.down_iter().filter(|(addr, _)| *addr == account1).count(), 1);
     assert_eq!(diff.up_iter().filter(|(addr, _)| *addr == account2).count(), 1);
     assert_eq!(diff.down_iter().filter(|(addr, _)| *addr == account2).count(), 1);
-    assert_eq!(diff.up_iter().count(), 4);
+    assert_eq!(diff.up_iter().count(), 5);
     assert_eq!(diff.down_iter().count(), 3);
 }
 
 #[test]
 fn transfer_confidential_fails_with_invalid_balance() {
-    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount::new(100_000), None);
+    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount(100_000), None);
     let (mut template_test, faucet, _faucet_resx) = setup(confidential_proof);
 
     // Create an account
     let (account1, _owner1, _k) = template_test.create_owned_account();
 
     // Create proof for transfer
-    let proof = generate_withdraw_proof(
-        &faucet_mask,
-        Amount::new(1001),
-        Some(Amount::new(99_000)),
-        Amount::new(0),
-    );
+    let proof = generate_withdraw_proof(&faucet_mask, Amount(1001), Some(Amount(99_000)), Amount(0));
 
     // Transfer faucet funds into account 1
     let vars = [
@@ -173,7 +153,7 @@ fn transfer_confidential_fails_with_invalid_balance() {
 
 #[test]
 fn reveal_confidential_and_transfer() {
-    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount::new(100_000), None);
+    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount(100_000), None);
     let (mut template_test, faucet, faucet_resx) = setup(confidential_proof);
 
     // Create an account
@@ -182,26 +162,12 @@ fn reveal_confidential_and_transfer() {
 
     // Create proof for transfer
 
-    let proof = generate_withdraw_proof(
-        &faucet_mask,
-        Amount::new(1000),
-        Some(Amount::new(99_000)),
-        Amount::new(0),
-    );
+    let proof = generate_withdraw_proof(&faucet_mask, Amount(1000), Some(Amount(99_000)), Amount(0));
     // Reveal 90 tokens and 10 confidentially
-    let reveal_proof = generate_withdraw_proof(
-        &proof.output_mask,
-        Amount::new(10),
-        Some(Amount::new(900)),
-        Amount::new(90),
-    );
+    let reveal_proof = generate_withdraw_proof(&proof.output_mask, Amount(10), Some(Amount(900)), Amount(90));
     // Then reveal the rest
-    let reveal_bucket_proof = generate_withdraw_proof(
-        &reveal_proof.output_mask,
-        Amount::new(0),
-        Some(Amount::new(0)),
-        Amount::new(10),
-    );
+    let reveal_bucket_proof =
+        generate_withdraw_proof(&reveal_proof.output_mask, Amount(0), Some(Amount(0)), Amount(10));
 
     // Transfer faucet funds into account 1
     let vars = [
@@ -241,7 +207,7 @@ fn reveal_confidential_and_transfer() {
         account2.deposit(revealed_rest_funds);
         
         // Account2 can withdraw revealed funds by amount
-        let small_amt = account2.withdraw(resource, Amount::new(10));
+        let small_amt = account2.withdraw(resource, Amount(10));
         account1.deposit(small_amt);
         
         account1.balance(resource);
@@ -254,17 +220,17 @@ fn reveal_confidential_and_transfer() {
 
     assert_eq!(
         result.finalize.execution_results[12].decode::<Amount>().unwrap(),
-        Amount::new(10)
+        Amount(10)
     );
     assert_eq!(
         result.finalize.execution_results[13].decode::<Amount>().unwrap(),
-        Amount::new(90)
+        Amount(90)
     );
 }
 
 #[test]
 fn attempt_to_reveal_with_unbalanced_proof() {
-    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount::new(100_000), None);
+    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount(100_000), None);
     let (mut template_test, faucet, faucet_resx) = setup(confidential_proof);
 
     // Create an account
@@ -273,19 +239,9 @@ fn attempt_to_reveal_with_unbalanced_proof() {
 
     // Create proof for transfer
 
-    let proof = generate_withdraw_proof(
-        &faucet_mask,
-        Amount::new(1000),
-        Some(Amount::new(99_000)),
-        Amount::new(0),
-    );
+    let proof = generate_withdraw_proof(&faucet_mask, Amount(1000), Some(Amount(99_000)), Amount(0));
     // Attempt to reveal more than input - change
-    let reveal_proof = generate_withdraw_proof(
-        &proof.output_mask,
-        Amount::new(0),
-        Some(Amount::new(900)),
-        Amount::new(110),
-    );
+    let reveal_proof = generate_withdraw_proof(&proof.output_mask, Amount(0), Some(Amount(900)), Amount(110));
 
     // Transfer faucet funds into account 1
     let vars = [
@@ -330,7 +286,7 @@ fn attempt_to_reveal_with_unbalanced_proof() {
 
 #[test]
 fn multi_commitment_join() {
-    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount::new(100_000), None);
+    let (confidential_proof, faucet_mask, _change) = generate_confidential_proof(Amount(100_000), None);
     let (mut template_test, faucet, faucet_resx) = setup(confidential_proof);
 
     // Create an account
@@ -338,26 +294,21 @@ fn multi_commitment_join() {
 
     // Create proof for transfer
 
-    let withdraw_proof1 = generate_withdraw_proof(
-        &faucet_mask,
-        Amount::new(1000),
-        Some(Amount::new(99_000)),
-        Amount::new(0),
-    );
+    let withdraw_proof1 = generate_withdraw_proof(&faucet_mask, Amount(1000), Some(Amount(99_000)), Amount(0));
     let withdraw_proof2 = generate_withdraw_proof(
         withdraw_proof1.change_mask.as_ref().unwrap(),
-        Amount::new(1000),
-        Some(Amount::new(98_000)),
-        Amount::new(0),
+        Amount(1000),
+        Some(Amount(98_000)),
+        Amount(0),
     );
     let join_proof = generate_withdraw_proof_with_inputs(
         &[
-            (withdraw_proof1.output_mask, Amount::new(1000)),
-            (withdraw_proof2.output_mask, Amount::new(1000)),
+            (withdraw_proof1.output_mask, Amount(1000)),
+            (withdraw_proof2.output_mask, Amount(1000)),
         ],
-        Amount::new(2000),
+        Amount(2000),
         None,
-        Amount::new(0),
+        Amount(0),
     );
 
     // Transfer faucet funds into account 1
@@ -426,7 +377,7 @@ pub mod utilities {
     use tari_engine_types::confidential::{challenges, get_commitment_factory, get_range_proof_service};
     use tari_template_lib::{
         crypto::{BalanceProofSignature, RistrettoPublicKeyBytes},
-        models::{Amount, ConfidentialOutputProof, ConfidentialStatement, ConfidentialWithdrawProof, EncryptedValue},
+        models::{Amount, ConfidentialOutputProof, ConfidentialStatement, ConfidentialWithdrawProof, EncryptedData},
     };
     use tari_utilities::ByteArray;
 
@@ -506,15 +457,15 @@ pub mod utilities {
                 output_proof: ConfidentialOutputProof {
                     output_statement: ConfidentialStatement {
                         commitment: output_statement.commitment,
-                        sender_public_nonce: None,
-                        encrypted_value: EncryptedValue::default(),
+                        sender_public_nonce: Default::default(),
+                        encrypted_data: EncryptedData::default(),
                         minimum_value_promise: output_statement.minimum_value_promise,
                         revealed_amount,
                     },
                     change_statement: Some(ConfidentialStatement {
                         commitment: change_statement.commitment,
-                        sender_public_nonce: None,
-                        encrypted_value: EncryptedValue::default(),
+                        sender_public_nonce: Default::default(),
+                        encrypted_data: EncryptedData::default(),
                         minimum_value_promise: change_statement.minimum_value_promise,
                         revealed_amount: Amount::zero(),
                     }),
@@ -561,15 +512,15 @@ pub mod utilities {
                     output_statement: ConfidentialStatement {
                         commitment: output_statement.commitment,
                         // R and encrypted value are informational and can be left out as far as the VN is concerned
-                        sender_public_nonce: None,
-                        encrypted_value: Default::default(),
+                        sender_public_nonce: Default::default(),
+                        encrypted_data: Default::default(),
                         minimum_value_promise: output_statement.minimum_value_promise,
                         revealed_amount,
                     },
                     change_statement: change_statement.map(|change| ConfidentialStatement {
                         commitment: change.commitment,
-                        sender_public_nonce: None,
-                        encrypted_value: Default::default(),
+                        sender_public_nonce: Default::default(),
+                        encrypted_data: Default::default(),
                         minimum_value_promise: change.minimum_value_promise,
                         revealed_amount: Amount::zero(),
                     }),
@@ -592,11 +543,9 @@ pub mod utilities {
     ) -> Result<ConfidentialOutputProof, RangeProofError> {
         let proof_change_statement = change_statement.as_ref().map(|statement| ConfidentialStatement {
             commitment: commitment_to_bytes(&statement.mask, statement.amount),
-            sender_public_nonce: Some(
-                RistrettoPublicKeyBytes::from_bytes(statement.sender_public_nonce.as_bytes())
-                    .expect("[generate_confidential_proof] change nonce"),
-            ),
-            encrypted_value: Default::default(),
+            sender_public_nonce: RistrettoPublicKeyBytes::from_bytes(statement.sender_public_nonce.as_bytes())
+                .expect("[generate_confidential_proof] change nonce"),
+            encrypted_data: Default::default(),
             minimum_value_promise: statement.minimum_value_promise,
             revealed_amount: Amount::zero(),
         });
@@ -606,11 +555,11 @@ pub mod utilities {
         Ok(ConfidentialOutputProof {
             output_statement: ConfidentialStatement {
                 commitment: commitment_to_bytes(&output_statement.mask, output_statement.amount),
-                sender_public_nonce: Some(
-                    RistrettoPublicKeyBytes::from_bytes(output_statement.sender_public_nonce.as_bytes())
-                        .expect("[generate_confidential_proof] output nonce"),
-                ),
-                encrypted_value: Default::default(),
+                sender_public_nonce: RistrettoPublicKeyBytes::from_bytes(
+                    output_statement.sender_public_nonce.as_bytes(),
+                )
+                .expect("[generate_confidential_proof] output nonce"),
+                encrypted_data: Default::default(),
                 minimum_value_promise: output_statement.minimum_value_promise,
                 revealed_amount: Amount::zero(),
             },

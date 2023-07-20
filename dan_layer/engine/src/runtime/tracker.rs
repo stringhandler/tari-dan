@@ -29,11 +29,13 @@ use std::{
 };
 
 use log::debug;
-use tari_dan_common_types::optional::Optional;
+use tari_dan_common_types::{optional::Optional, services::template_provider::TemplateProvider};
 use tari_engine_types::{
     bucket::Bucket,
-    commit_result::{RejectReason, TransactionResult},
+    commit_result::{RejectReason, TransactionReceipt, TransactionResult},
+    component::{ComponentBody, ComponentHeader},
     confidential::UnclaimedConfidentialOutput,
+    events::Event,
     fees::{FeeReceipt, FeeSource},
     logs::LogEntry,
     non_fungible::NonFungibleContainer,
@@ -53,8 +55,6 @@ use tari_template_lib::{
         Amount,
         BucketId,
         ComponentAddress,
-        ComponentBody,
-        ComponentHeader,
         Metadata,
         NonFungibleAddress,
         NonFungibleIndexAddress,
@@ -68,55 +68,87 @@ use tari_template_lib::{
 use tari_transaction::id_provider::IdProvider;
 
 use crate::{
+    packager::LoadedTemplate,
     runtime::{fee_state::FeeState, working_state::WorkingState, RuntimeError, TransactionCommitError},
     state_store::{memory::MemoryStateStore, AtomicDb, StateReader},
 };
 
 const LOG_TARGET: &str = "tari::dan::engine::runtime::state_tracker";
 
+pub struct FinalizeTracker {
+    pub result: TransactionResult,
+    pub events: Vec<Event>,
+    pub fee_receipt: FeeReceipt,
+    pub logs: Vec<LogEntry>,
+}
+
 #[derive(Debug, Clone)]
-pub struct StateTracker {
+pub struct StateTracker<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> {
     working_state: Arc<RwLock<WorkingState>>,
     fee_state: Arc<RwLock<FeeState>>,
     id_provider: IdProvider,
-    template_defs: HashMap<TemplateAddress, TemplateDef>,
+    template_provider: Arc<TTemplateProvider>,
     fee_checkpoint: Arc<Mutex<Option<WorkingState>>>,
 }
 
 #[derive(Debug, Clone)]
 pub struct RuntimeState {
+    pub template_name: String,
     pub template_address: TemplateAddress,
+    pub component_address: Option<ComponentAddress>,
+    pub recursion_depth: usize,
+    pub max_recursion_depth: usize,
 }
 
-impl StateTracker {
+impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate>> StateTracker<TTemplateProvider> {
     pub fn new(
         state_store: MemoryStateStore,
         id_provider: IdProvider,
-        template_defs: HashMap<TemplateAddress, TemplateDef>,
+        template_provider: Arc<TTemplateProvider>,
     ) -> Self {
         Self {
             working_state: Arc::new(RwLock::new(WorkingState::new(state_store))),
             fee_state: Arc::new(RwLock::new(FeeState::new())),
             id_provider,
-            template_defs,
+            template_provider,
             fee_checkpoint: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn add_event(&self, event: Event) {
+        self.write_with(|state| state.events.push(event))
     }
 
     pub fn add_log(&self, log: LogEntry) {
         self.write_with(|state| state.logs.push(log));
     }
 
+    pub fn take_events(&self) -> Vec<Event> {
+        self.write_with(|state| mem::take(&mut state.events))
+    }
+
     pub fn take_logs(&self) -> Vec<LogEntry> {
         self.write_with(|state| mem::take(&mut state.logs))
     }
 
-    pub fn get_template_def(&self) -> Result<&TemplateDef, RuntimeError> {
+    pub fn get_template_provider(&self) -> Arc<TTemplateProvider> {
+        self.template_provider.clone()
+    }
+
+    pub fn get_template_def(&self) -> Result<TemplateDef, RuntimeError> {
         let runtime_state = self.runtime_state()?;
         Ok(self
-            .template_defs
-            .get(&runtime_state.template_address)
-            .expect("Template def not found for current template"))
+            .template_provider
+            .get_template_module(&runtime_state.template_address)
+            .map_err(|e| RuntimeError::FailedToLoadTemplate {
+                address: runtime_state.template_address,
+                details: e.to_string(),
+            })?
+            .ok_or(RuntimeError::TemplateNotFound {
+                template_address: runtime_state.template_address,
+            })?
+            .template_def()
+            .clone())
     }
 
     fn check_amount(&self, amount: Amount) -> Result<(), RuntimeError> {
@@ -129,13 +161,20 @@ impl StateTracker {
         Ok(())
     }
 
+    pub fn get_template_address(&self) -> Result<TemplateAddress, RuntimeError> {
+        Ok(self.runtime_state()?.template_address)
+    }
+
     pub fn new_resource(
         &self,
         resource_type: ResourceType,
+        token_symbol: String,
         metadata: Metadata,
     ) -> Result<ResourceAddress, RuntimeError> {
-        let resource_address = self.id_provider.new_resource_address()?;
-        let resource = Resource::new(resource_type, metadata);
+        let resource_address = self
+            .id_provider
+            .new_resource_address(&self.runtime_state()?.template_address, &token_symbol)?;
+        let resource = Resource::new(resource_type, token_symbol, metadata);
         self.write_with(|state| {
             state.new_resources.insert(resource_address, resource);
         });
@@ -202,7 +241,7 @@ impl StateTracker {
                         target: LOG_TARGET,
                         "Minting confidential tokens on resource: {}", resource_address
                     );
-                    ResourceContainer::validate_confidential_mint(resource_address, proof)?
+                    ResourceContainer::validate_confidential_mint(resource_address, *proof)?
                 },
             };
 
@@ -348,25 +387,48 @@ impl StateTracker {
 
     pub fn new_component(
         &self,
-        module_name: String,
         state: Vec<u8>,
         access_rules: AccessRules,
+        component_id: Option<Hash>,
     ) -> Result<ComponentAddress, RuntimeError> {
         let runtime_state = self.runtime_state()?;
+        let template_address = runtime_state.template_address;
+        let module_name = runtime_state.template_name;
+        let tx_hash = self.transaction_hash();
+        let component_address = self
+            .id_provider()
+            .new_component_address(template_address, component_id)?;
+
         let component = ComponentBody { state };
-        let component_address = self.id_provider().new_component_address()?;
-        debug!(target: LOG_TARGET, "New component created: {}", component_address);
         let component = ComponentHeader {
             template_address: runtime_state.template_address,
-            module_name,
+            module_name: module_name.clone(),
             access_rules,
             state: component,
         };
 
         self.write_with(|state| {
-            // New root component
+            // The template address/component_id combination will not necessarily be unique so we need to check this.
+            if state.get_component(&component_address).optional()?.is_some() {
+                return Err(RuntimeError::ComponentAlreadyExists {
+                    address: component_address,
+                });
+            }
+
             state.new_components.insert(component_address, component);
-        });
+
+            state.events.push(Event::new(
+                Some(component_address),
+                template_address,
+                tx_hash,
+                "component-created".to_string(),
+                Metadata::from([("module_name".to_string(), module_name.to_string())]),
+            ));
+
+            Ok(())
+        })?;
+
+        debug!(target: LOG_TARGET, "New component created: {}", component_address);
         Ok(component_address)
     }
 
@@ -420,8 +482,12 @@ impl StateTracker {
         self.write_with(|state| state.borrow_vault_mut(vault_id, f))
     }
 
-    fn runtime_state(&self) -> Result<RuntimeState, RuntimeError> {
+    pub fn runtime_state(&self) -> Result<RuntimeState, RuntimeError> {
         self.read_with(|state| state.runtime_state.clone().ok_or(RuntimeError::IllegalRuntimeState))
+    }
+
+    pub fn runtime_state_component_address(&self) -> Result<Option<ComponentAddress>, RuntimeError> {
+        Ok(self.runtime_state()?.component_address)
     }
 
     pub fn set_last_instruction_output(&self, output: Option<Vec<u8>>) {
@@ -448,7 +514,7 @@ impl StateTracker {
 
     pub fn put_in_workspace(&self, key: Vec<u8>, value: Vec<u8>) -> Result<(), RuntimeError> {
         self.write_with(|state| {
-            state.workspace.insert(key.clone(), value);
+            state.workspace.insert(key.clone(), value)?;
             Ok(())
         })
     }
@@ -467,9 +533,21 @@ impl StateTracker {
     pub fn finalize(
         &self,
         mut substates_to_persist: HashMap<SubstateAddress, SubstateValue>,
-    ) -> Result<(TransactionResult, FeeReceipt), RuntimeError> {
+    ) -> Result<FinalizeTracker, RuntimeError> {
         // Resolve the transfers to the fee pool resource and vault refunds
         let finalized_fee = self.finalize_fees(&mut substates_to_persist)?;
+
+        let transaction_receipt_mut = substates_to_persist
+            .get_mut(&SubstateAddress::TransactionReceipt(self.transaction_hash().into()))
+            .and_then(|s| s.as_transaction_receipt_mut())
+            .expect(
+                "InvariantViolation: expected transaction receipt to be added to substates to persist but it wasnt",
+            );
+        transaction_receipt_mut.fee_receipt = Some(finalized_fee.clone());
+
+        let events = transaction_receipt_mut.events.clone();
+        let logs = transaction_receipt_mut.logs.clone();
+
         // Finalise will always reset the state
         let state = self.take_working_state();
 
@@ -482,7 +560,12 @@ impl StateTracker {
             Err(err) => TransactionResult::Reject(RejectReason::ExecutionFailure(err.to_string())),
         };
 
-        Ok((result, finalized_fee))
+        Ok(FinalizeTracker {
+            result,
+            events,
+            fee_receipt: finalized_fee,
+            logs,
+        })
     }
 
     fn generate_substate_diff(
@@ -552,7 +635,7 @@ impl StateTracker {
             .sum::<Amount>();
 
         let mut fee_resource =
-            ResourceContainer::confidential(CONFIDENTIAL_TARI_RESOURCE_ADDRESS, None, Amount::zero());
+            ResourceContainer::confidential(*CONFIDENTIAL_TARI_RESOURCE_ADDRESS, None, Amount::zero());
 
         // Collect the fee
         let mut remaining_fees = total_fees;
@@ -625,6 +708,21 @@ impl StateTracker {
                 let addr = SubstateAddress::NonFungibleIndex(address.clone());
                 up_states.insert(addr, substate.into());
             }
+
+            let events = state.events.clone();
+            let logs = state.logs.clone();
+
+            let transaction_receipt = TransactionReceipt {
+                transaction_hash: self.transaction_hash(),
+                events,
+                logs,
+                fee_receipt: None,
+            };
+
+            up_states.insert(
+                SubstateAddress::TransactionReceipt(transaction_receipt.transaction_hash.into()),
+                SubstateValue::TransactionReceipt(transaction_receipt),
+            );
 
             up_states
         })

@@ -25,18 +25,24 @@ use std::fmt::Display;
 use anyhow::anyhow;
 use tari_bor::BorError;
 use tari_dan_common_types::optional::IsNotFoundError;
-use tari_engine_types::{resource_container::ResourceError, substate::SubstateAddress};
+use tari_engine_types::{
+    commit_result::TransactionReceiptAddress,
+    resource_container::ResourceError,
+    substate::SubstateAddress,
+};
 use tari_template_lib::models::{
     Amount,
     BucketId,
     ComponentAddress,
     NonFungibleId,
     ResourceAddress,
+    TemplateAddress,
     UnclaimedConfidentialOutputAddress,
     VaultId,
 };
-use tari_transaction::id_provider::MaxIdsExceeded;
+use tari_transaction::id_provider::IdProviderError;
 
+use super::workspace::WorkspaceError;
 use crate::{
     runtime::{FunctionIdent, RuntimeModuleError},
     state_store::StateStoreError,
@@ -50,6 +56,8 @@ pub enum RuntimeError {
     StateDbError(#[from] anyhow::Error),
     #[error("State storage error: {0}")]
     StateStoreError(#[from] StateStoreError),
+    #[error("Workspace error: {0}")]
+    WorkspaceError(#[from] WorkspaceError),
     #[error("Substate not found with address '{address}'")]
     SubstateNotFound { address: SubstateAddress },
     #[error("Component not found with address '{address}'")]
@@ -92,7 +100,7 @@ pub enum RuntimeError {
     #[error(transparent)]
     TransactionCommitError(#[from] TransactionCommitError),
     #[error("Transaction generated too many outputs: {0}")]
-    TooManyOutputs(#[from] MaxIdsExceeded),
+    TooManyOutputs(#[from] IdProviderError),
     #[error("Duplicate NFT token id: {token_id}")]
     DuplicateNonFungibleId { token_id: NonFungibleId },
     #[error("Access Denied: {fn_ident}")]
@@ -111,10 +119,34 @@ pub enum RuntimeError {
     ConfidentialOutputAlreadyClaimed {
         address: UnclaimedConfidentialOutputAddress,
     },
+    #[error("Template {template_address} not found")]
+    TemplateNotFound { template_address: TemplateAddress },
     #[error("Insufficient fees paid: required {required_fee}, paid {fees_paid}")]
     InsufficientFeesPaid { required_fee: Amount, fees_paid: Amount },
     #[error("No checkpoint")]
     NoCheckpoint,
+    #[error("Component address must be sequential. Index before {index} was not found")]
+    ComponentAddressMustBeSequential { index: u32 },
+    #[error("Failed to load template '{address}': {details}")]
+    FailedToLoadTemplate { address: TemplateAddress, details: String },
+    #[error("Transaction Receipt already exists {address}")]
+    TransactionReceiptAlreadyExists { address: TransactionReceiptAddress },
+    #[error("Transaction Receipt not found")]
+    TransactionReceiptNotFound,
+    #[error("Component already exists {address}")]
+    ComponentAlreadyExists { address: ComponentAddress },
+    #[error("Call function error of function '{function}' on template '{template_address}': {details}")]
+    CallFunctionError {
+        template_address: TemplateAddress,
+        function: String,
+        details: String,
+    },
+    #[error("Call method error of method '{method}' on component '{component_address}': {details}")]
+    CallMethodError {
+        component_address: ComponentAddress,
+        method: String,
+        details: String,
+    },
 }
 
 impl RuntimeError {
@@ -147,7 +179,7 @@ pub enum TransactionCommitError {
     #[error("Failed to obtain a state store transaction: {0}")]
     StateStoreTransactionError(anyhow::Error),
     #[error(transparent)]
-    MaxIdsExceeded(#[from] MaxIdsExceeded),
+    IdProviderError(#[from] IdProviderError),
     #[error("trying to mutate non fungible index of resource {resource_address} at index {index}")]
     NonFungibleIndexMutation {
         resource_address: ResourceAddress,

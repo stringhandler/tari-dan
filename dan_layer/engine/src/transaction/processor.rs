@@ -23,23 +23,27 @@
 use std::sync::Arc;
 
 use log::*;
-use tari_crypto::ristretto::RistrettoSecretKey;
+use tari_bor::encode;
+use tari_dan_common_types::services::template_provider::TemplateProvider;
 use tari_engine_types::{
     commit_result::{ExecuteResult, FinalizeResult, RejectReason},
+    indexed_value::IndexedValue,
     instruction::Instruction,
     instruction_result::InstructionResult,
 };
+use tari_template_abi::Type;
 use tari_template_lib::{
     arg,
     args::{Arg, WorkspaceAction},
     invoke_args,
-    models::Amount,
+    models::ComponentAddress,
+    prelude::TemplateAddress,
 };
 use tari_transaction::{id_provider::IdProvider, Transaction};
 use tari_utilities::ByteArray;
 
 use crate::{
-    packager::{LoadedTemplate, Package},
+    packager::LoadedTemplate,
     runtime::{
         AuthParams,
         AuthorizationScope,
@@ -49,6 +53,7 @@ use crate::{
         RuntimeInterfaceImpl,
         RuntimeModule,
         RuntimeState,
+        StateFinalize,
         StateTracker,
     },
     state_store::memory::MemoryStateStore,
@@ -58,60 +63,65 @@ use crate::{
 };
 
 const LOG_TARGET: &str = "tari::dan::engine::instruction_processor";
+pub const MAX_CALL_DEPTH: usize = 10;
 
-pub struct TransactionProcessor {
-    package: Package,
+pub struct TransactionProcessor<TTemplateProvider> {
+    // package: Package,
+    template_provider: Arc<TTemplateProvider>,
     state_db: MemoryStateStore,
     auth_params: AuthParams,
     consensus: ConsensusContext,
-    modules: Vec<Box<dyn RuntimeModule>>,
-    fee_loan: Amount,
+    modules: Vec<Arc<dyn RuntimeModule<TTemplateProvider>>>,
 }
 
-impl TransactionProcessor {
+impl<TTemplateProvider: TemplateProvider<Template = LoadedTemplate> + 'static> TransactionProcessor<TTemplateProvider> {
     pub fn new(
-        package: Package,
+        template_provider: Arc<TTemplateProvider>,
         state_db: MemoryStateStore,
         auth_params: AuthParams,
         consensus: ConsensusContext,
-        modules: Vec<Box<dyn RuntimeModule>>,
-        fee_loan: Amount,
+        modules: Vec<Arc<dyn RuntimeModule<TTemplateProvider>>>,
     ) -> Self {
         Self {
-            package,
+            template_provider,
             state_db,
             auth_params,
             consensus,
             modules,
-            fee_loan,
         }
     }
 
     pub fn execute(self, transaction: Transaction) -> Result<ExecuteResult, TransactionError> {
-        let id_provider = IdProvider::new(*transaction.hash(), 1000);
+        let id_provider = IdProvider::new(transaction.hash(), 1000);
         // TODO: We can avoid this for each execution with improved design
-        let template_defs = self.package.get_template_defs();
-        let tracker = StateTracker::new(self.state_db.clone(), id_provider, template_defs);
+        let tracker = StateTracker::new(self.state_db.clone(), id_provider, self.template_provider.clone());
         let initial_proofs = self.auth_params.initial_ownership_proofs.clone();
+        let template_provider = self.template_provider.clone();
         let runtime_interface = RuntimeInterfaceImpl::initialize(
             tracker,
             self.auth_params,
             self.consensus,
-            transaction.sender_public_key().clone(),
+            transaction.signer_public_key().clone(),
             self.modules,
-            self.fee_loan,
         )?;
-        let package = self.package;
 
-        let auth_scope = AuthorizationScope::new(&initial_proofs);
+        let auth_scope = AuthorizationScope::new(Arc::new(initial_proofs));
         let runtime = Runtime::new(Arc::new(runtime_interface));
-        let transaction_hash = *transaction.hash();
+        let transaction_hash = transaction.hash();
 
-        let (instructions, fee_instructions, _sig, _pk) = transaction.destruct();
+        let (fee_instructions, instructions) = transaction.into_instructions();
 
         let fee_exec_results = fee_instructions
             .into_iter()
-            .map(|instruction| Self::process_instruction(&package, &runtime, &auth_scope, instruction))
+            .map(|instruction| {
+                Self::process_instruction(
+                    template_provider.clone(),
+                    &runtime,
+                    auth_scope.clone(),
+                    instruction,
+                    MAX_CALL_DEPTH,
+                )
+            })
             .collect::<Result<Vec<_>, _>>();
 
         let fee_exec_result = match fee_exec_results {
@@ -141,16 +151,27 @@ impl TransactionProcessor {
 
         let instruction_result = instructions
             .into_iter()
-            .map(|instruction| Self::process_instruction(&package, &runtime, &auth_scope, instruction))
+            .map(|instruction| {
+                Self::process_instruction(
+                    template_provider.clone(),
+                    &runtime,
+                    auth_scope.clone(),
+                    instruction,
+                    MAX_CALL_DEPTH,
+                )
+            })
             .collect::<Result<Vec<_>, _>>();
 
         match instruction_result {
             Ok(execution_results) => {
-                let (mut finalize, fee_receipt) = runtime.interface().finalize()?;
+                let StateFinalize {
+                    mut finalized,
+                    fee_receipt,
+                } = runtime.interface().finalize()?;
 
-                if !fee_receipt.is_paid_in_full() && fee_receipt.total_fees_charged() > self.fee_loan {
+                if !fee_receipt.is_paid_in_full() {
                     return Ok(ExecuteResult {
-                        finalize,
+                        finalize: finalized,
                         transaction_failure: Some(RejectReason::FeesNotPaid(format!(
                             "Required fees {} but {} paid",
                             fee_receipt.total_fees_charged(),
@@ -159,10 +180,10 @@ impl TransactionProcessor {
                         fee_receipt: Some(fee_receipt),
                     });
                 }
-                finalize.execution_results = execution_results;
+                finalized.execution_results = execution_results;
 
                 Ok(ExecuteResult {
-                    finalize,
+                    finalize: finalized,
                     fee_receipt: Some(fee_receipt),
                     transaction_failure: None,
                 })
@@ -173,12 +194,15 @@ impl TransactionProcessor {
                 // successful instructions are still charged even though the transaction failed.
                 runtime.interface().reset_to_fee_checkpoint()?;
                 // Finalize will now contain the fee payments and vault refunds only
-                let (mut finalize, fee_payment) = runtime.interface().finalize()?;
-                finalize.execution_results = fee_exec_result;
+                let StateFinalize {
+                    mut finalized,
+                    fee_receipt,
+                } = runtime.interface().finalize()?;
+                finalized.execution_results = fee_exec_result;
 
                 Ok(ExecuteResult {
-                    finalize,
-                    fee_receipt: Some(fee_payment),
+                    finalize: finalized,
+                    fee_receipt: Some(fee_receipt),
                     transaction_failure: Some(RejectReason::ExecutionFailure(err.to_string())),
                 })
             },
@@ -186,10 +210,11 @@ impl TransactionProcessor {
     }
 
     fn process_instruction(
-        package: &Package,
+        template_provider: Arc<TTemplateProvider>,
         runtime: &Runtime,
-        auth_scope: &AuthorizationScope<'_>,
+        auth_scope: AuthorizationScope,
         instruction: Instruction,
+        max_recursion_depth: usize,
     ) -> Result<InstructionResult, TransactionError> {
         debug!(target: LOG_TARGET, "instruction = {:?}", instruction);
         match instruction {
@@ -197,58 +222,34 @@ impl TransactionProcessor {
                 template_address,
                 function,
                 args,
-            } => {
-                runtime
-                    .interface()
-                    .set_current_runtime_state(RuntimeState { template_address })?;
-
-                let template =
-                    package
-                        .get_template_by_address(&template_address)
-                        .ok_or(TransactionError::TemplateNotFound {
-                            address: template_address,
-                        })?;
-
-                let result = Self::invoke_template(template.clone(), runtime.clone(), &function, args)?;
-                Ok(result)
-            },
+            } => Self::call_function(
+                template_provider,
+                runtime,
+                auth_scope,
+                &template_address,
+                &function,
+                args,
+                0,
+                max_recursion_depth,
+            ),
             Instruction::CallMethod {
                 component_address,
                 method,
                 args,
-            } => {
-                let component = runtime.interface().get_component(&component_address)?;
-                // TODO: In this very basic auth system, you can only call on owned objects (because
-                // initial_ownership_proofs is       usually set to include the owner token).
-                auth_scope.check_access_rules(
-                    &FunctionIdent::Template {
-                        module_name: component.module_name.clone(),
-                        function: method.clone(),
-                    },
-                    &component.access_rules,
-                )?;
-
-                let template = package.get_template_by_address(&component.template_address).ok_or(
-                    TransactionError::TemplateNotFound {
-                        address: component.template_address,
-                    },
-                )?;
-
-                runtime.interface().set_current_runtime_state(RuntimeState {
-                    template_address: component.template_address,
-                })?;
-
-                let mut final_args = Vec::with_capacity(args.len() + 1);
-                final_args.push(arg![component_address]);
-                final_args.extend(args);
-
-                let result = Self::invoke_template(template.clone(), runtime.clone(), &method, final_args)?;
-                Ok(result)
-            },
+            } => Self::call_method(
+                template_provider,
+                runtime,
+                auth_scope,
+                &component_address,
+                &method,
+                args,
+                0,
+                max_recursion_depth,
+            ),
+            // Basically names an output on the workspace so that you can refer to it as an
+            // Arg::Variable
             Instruction::PutLastInstructionOutputOnWorkspace { key } => {
-                let _result = runtime
-                    .interface()
-                    .workspace_invoke(WorkspaceAction::PutLastInstructionOutput, invoke_args![key].into())?;
+                Self::put_output_on_workspace_with_name(runtime, key)?;
                 Ok(InstructionResult::empty())
             },
             Instruction::EmitLog { level, message } => {
@@ -260,26 +261,154 @@ impl TransactionProcessor {
                 runtime.interface().claim_burn(*claim)?;
                 Ok(InstructionResult::empty())
             },
-            Instruction::CreateFreeTestCoins { amount, private_key } => {
-                runtime
-                    .interface()
-                    .create_free_test_coins(amount, RistrettoSecretKey::from_bytes(&private_key)?)?;
-                Ok(InstructionResult::empty())
+            Instruction::CreateFreeTestCoins {
+                revealed_amount: amount,
+                output,
+            } => {
+                let bucket_id = runtime.interface().create_free_test_coins(amount, output)?;
+                let encoded = encode(&bucket_id)?;
+                Ok(InstructionResult {
+                    value: IndexedValue::from_raw(&encoded)?,
+                    raw: encoded,
+                    return_type: Type::Other {
+                        name: "BucketId".to_string(),
+                    },
+                })
             },
         }
     }
 
-    fn invoke_template(
-        module: LoadedTemplate,
-        runtime: Runtime,
+    pub fn put_output_on_workspace_with_name(runtime: &Runtime, key: Vec<u8>) -> Result<(), TransactionError> {
+        runtime
+            .interface()
+            .workspace_invoke(WorkspaceAction::PutLastInstructionOutput, invoke_args![key].into())?;
+        Ok(())
+    }
+
+    pub fn call_function(
+        template_provider: Arc<TTemplateProvider>,
+        runtime: &Runtime,
+        auth_scope: AuthorizationScope,
+        template_address: &TemplateAddress,
         function: &str,
         args: Vec<Arg>,
+        recursion_depth: usize,
+        max_recursion_depth: usize,
     ) -> Result<InstructionResult, TransactionError> {
+        let template = template_provider
+            .get_template_module(template_address)
+            .map_err(|e| TransactionError::FailedToLoadTemplate {
+                address: *template_address,
+                details: e.to_string(),
+            })?
+            .ok_or(TransactionError::TemplateNotFound {
+                address: *template_address,
+            })?;
+
+        runtime.interface().set_current_runtime_state(RuntimeState {
+            template_name: template.template_name().to_string(),
+            template_address: *template_address,
+            component_address: None,
+            recursion_depth,
+            max_recursion_depth,
+        })?;
+
+        let result = Self::invoke_template(
+            template,
+            template_provider,
+            runtime.clone(),
+            auth_scope,
+            function,
+            args,
+            0,
+            1,
+        )?;
+        Ok(result)
+    }
+
+    pub fn call_method(
+        template_provider: Arc<TTemplateProvider>,
+        runtime: &Runtime,
+        auth_scope: AuthorizationScope,
+        component_address: &ComponentAddress,
+        method: &str,
+        args: Vec<Arg>,
+        recursion_depth: usize,
+        max_recursion_depth: usize,
+    ) -> Result<InstructionResult, TransactionError> {
+        let component = runtime.interface().get_component(component_address)?;
+        // TODO: In this very basic auth system, you can only call on owned objects (because
+        // initial_ownership_proofs is       usually set to include the owner token).
+        auth_scope.check_access_rules(
+            &FunctionIdent::Template {
+                module_name: component.module_name.clone(),
+                function: method.to_string(),
+            },
+            &component.access_rules,
+        )?;
+
+        let template = template_provider
+            .get_template_module(&component.template_address)
+            .map_err(|e| TransactionError::FailedToLoadTemplate {
+                address: component.template_address,
+                details: e.to_string(),
+            })?
+            .ok_or(TransactionError::TemplateNotFound {
+                address: component.template_address,
+            })?;
+
+        runtime.interface().set_current_runtime_state(RuntimeState {
+            template_name: template.template_name().to_string(),
+            template_address: component.template_address,
+            component_address: Some(*component_address),
+            recursion_depth,
+            max_recursion_depth,
+        })?;
+
+        let mut final_args = Vec::with_capacity(args.len() + 1);
+        final_args.push(arg![component_address]);
+        final_args.extend(args);
+
+        let result = Self::invoke_template(
+            template,
+            template_provider,
+            runtime.clone(),
+            auth_scope,
+            method,
+            final_args,
+            recursion_depth,
+            max_recursion_depth,
+        )?;
+        Ok(result)
+    }
+
+    fn invoke_template(
+        module: LoadedTemplate,
+        template_provider: Arc<TTemplateProvider>,
+        runtime: Runtime,
+        auth_scope: AuthorizationScope,
+        function: &str,
+        args: Vec<Arg>,
+        recursion_depth: usize,
+        max_recursion_depth: usize,
+    ) -> Result<InstructionResult, TransactionError> {
+        if recursion_depth > max_recursion_depth {
+            return Err(TransactionError::RecursionLimitExceeded);
+        }
         let result = match module {
             LoadedTemplate::Wasm(wasm_module) => {
                 let process = WasmProcess::start(wasm_module, runtime)?;
                 process.invoke_by_name(function, args)?
             },
+            LoadedTemplate::Flow(flow_factory) => flow_factory.run_new_instance(
+                template_provider,
+                runtime,
+                auth_scope,
+                function,
+                args,
+                recursion_depth,
+                max_recursion_depth,
+            )?,
         };
         Ok(result)
     }

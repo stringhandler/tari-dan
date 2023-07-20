@@ -1,94 +1,97 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
-use std::collections::HashMap;
-
 use log::*;
-use tari_common_types::types::FixedHash;
 use tari_dan_common_types::optional::{IsNotFoundError, Optional};
 use tari_engine_types::{
-    substate::{SubstateAddress, SubstateDiff},
-    TemplateAddress,
+    indexed_value::{IndexedValue, IndexedValueVisitorError},
+    substate::SubstateDiff,
 };
-use tari_transaction::Transaction;
-use tari_validator_node_client::{
-    types::{GetTransactionQcsRequest, GetTransactionResultRequest, SubmitTransactionRequest},
-    ValidatorNodeClient,
-    ValidatorNodeClientError,
-};
+use tari_transaction::{SubstateRequirement, Transaction, TransactionId};
 
 use crate::{
     models::{TransactionStatus, VersionedSubstateAddress, WalletTransaction},
+    network::{TransactionQueryResult, WalletNetworkInterface},
     storage::{WalletStorageError, WalletStore, WalletStoreReader, WalletStoreWriter},
 };
 
 const LOG_TARGET: &str = "tari::dan::wallet_sdk::apis::transaction";
 
-pub struct TransactionApi<'a, TStore> {
+pub struct TransactionApi<'a, TStore, TNetworkInterface> {
     store: &'a TStore,
-    validator_node_jrpc_endpoint: &'a str,
+    network_interface: &'a TNetworkInterface,
 }
 
-impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
-    pub fn new(store: &'a TStore, validator_node_jrpc_endpoint: &'a str) -> Self {
+impl<'a, TStore, TNetworkInterface> TransactionApi<'a, TStore, TNetworkInterface>
+where
+    TStore: WalletStore,
+    TNetworkInterface: WalletNetworkInterface,
+    TNetworkInterface::Error: IsNotFoundError,
+{
+    pub fn new(store: &'a TStore, network_interface: &'a TNetworkInterface) -> Self {
         Self {
             store,
-            validator_node_jrpc_endpoint,
+            network_interface,
         }
     }
 
-    pub fn get(&self, hash: FixedHash) -> Result<WalletTransaction, TransactionApiError> {
+    pub fn get(&self, tx_id: TransactionId) -> Result<WalletTransaction, TransactionApiError> {
         let mut tx = self.store.create_read_tx()?;
-        let transaction = tx.transaction_get(hash)?;
+        let transaction = tx.transaction_get(tx_id)?;
         Ok(transaction)
     }
 
-    pub async fn submit_to_vn(&self, transaction: Transaction) -> Result<FixedHash, TransactionApiError> {
-        self.submit_to_vn_internal(transaction, false).await
-    }
-
-    pub async fn submit_dry_run_to_vn(&self, transaction: Transaction) -> Result<FixedHash, TransactionApiError> {
-        self.submit_to_vn_internal(transaction, true).await
-    }
-
-    async fn submit_to_vn_internal(
+    pub async fn submit_transaction(
         &self,
         transaction: Transaction,
-        is_dry_run: bool,
-    ) -> Result<FixedHash, TransactionApiError> {
+        required_substates: Vec<SubstateRequirement>,
+    ) -> Result<TransactionId, TransactionApiError> {
         self.store
-            .with_write_tx(|tx| tx.transactions_insert(&transaction, is_dry_run))?;
+            .with_write_tx(|tx| tx.transactions_insert(&transaction, false))?;
 
-        let mut client = self.get_validator_node_client()?;
+        let transaction_id = self
+            .network_interface
+            .submit_transaction(transaction, required_substates)
+            .await
+            .map_err(|e| TransactionApiError::NetworkInterfaceError(e.to_string()))?;
 
-        let resp = client
-            .submit_transaction(SubmitTransactionRequest {
-                transaction,
-                wait_for_result: is_dry_run,
-                wait_for_result_timeout: None,
-                is_dry_run,
-            })
-            .await?;
+        self.store.with_write_tx(|tx| {
+            tx.transactions_set_result_and_status(transaction_id, None, None, None, None, TransactionStatus::Pending)
+        })?;
+
+        Ok(transaction_id)
+    }
+
+    pub async fn submit_dry_run_transaction(
+        &self,
+        transaction: Transaction,
+        required_substates: Vec<SubstateRequirement>,
+    ) -> Result<TransactionQueryResult, TransactionApiError> {
+        self.store
+            .with_write_tx(|tx| tx.transactions_insert(&transaction, true))?;
+
+        let result = self
+            .network_interface
+            .submit_dry_run_transaction(transaction, required_substates)
+            .await
+            .map_err(|e| TransactionApiError::NetworkInterfaceError(e.to_string()))?;
+
+        let execution_result = result.execution_result.as_ref().ok_or_else(|| {
+            TransactionApiError::NetworkInterfaceError("No execution result returned from dry run".to_string())
+        })?;
 
         self.store.with_write_tx(|tx| {
             tx.transactions_set_result_and_status(
-                resp.hash,
-                resp.result.as_ref().map(|a| &a.finalize),
-                resp.result.as_ref().and_then(|r| r.transaction_failure.as_ref()),
-                resp.result
-                    .as_ref()
-                    .and_then(|a| a.fee_breakdown.as_ref())
-                    .map(|b| b.total_fees_charged),
+                result.transaction_id,
+                Some(&execution_result.finalize),
+                execution_result.transaction_failure.as_ref(),
+                execution_result.fee_receipt.as_ref().map(|f| f.total_fees_charged()),
                 None,
-                if is_dry_run {
-                    TransactionStatus::DryRun
-                } else {
-                    TransactionStatus::Pending
-                },
+                TransactionStatus::DryRun,
             )
         })?;
 
-        Ok(resp.hash)
+        Ok(result)
     }
 
     pub fn fetch_all_by_status(
@@ -100,35 +103,35 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
         Ok(transactions)
     }
 
-    fn get_validator_node_client(&self) -> Result<ValidatorNodeClient, TransactionApiError> {
-        ValidatorNodeClient::connect(self.validator_node_jrpc_endpoint)
-            .map_err(TransactionApiError::ValidatorNodeClientError)
+    pub fn fetch_all(&self) -> Result<Vec<WalletTransaction>, TransactionApiError> {
+        let mut tx = self.store.create_read_tx()?;
+        let transactions = tx.transactions_fetch_all()?;
+        Ok(transactions)
     }
 
     pub async fn check_and_store_finalized_transaction(
         &self,
-        hash: FixedHash,
+        transaction_id: TransactionId,
     ) -> Result<Option<WalletTransaction>, TransactionApiError> {
         // Multithreaded considerations: The transaction result could be requested more than once because db
         // transactions cannot be used around await points.
-        let transaction = self.store.with_read_tx(|tx| tx.transaction_get(hash))?;
+        let transaction = self.store.with_read_tx(|tx| tx.transaction_get(transaction_id))?;
         if transaction.finalize.is_some() {
             return Ok(Some(transaction));
         }
 
-        let mut client = self.get_validator_node_client()?;
-
-        let maybe_resp = client
-            .get_transaction_result(GetTransactionResultRequest { hash })
+        let maybe_resp = self
+            .network_interface
+            .query_transaction_result(transaction_id)
             .await
             .optional()
-            .map_err(TransactionApiError::ValidatorNodeClientError)?;
+            .map_err(|e| TransactionApiError::NetworkInterfaceError(e.to_string()))?;
 
         let Some(resp) = maybe_resp else {
-            warn!( target: LOG_TARGET, "Transaction result not found for transaction with hash {}. Marking transaction as invalid", hash);
+            warn!( target: LOG_TARGET, "Transaction result not found for transaction with hash {}. Marking transaction as invalid", transaction_id);
             self.store.with_write_tx(|tx| {
                 tx.transactions_set_result_and_status(
-                    hash,
+                    transaction_id,
                     None,
                     None,
                     None,
@@ -137,7 +140,8 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
                 )
             })?;
 
-            // Not found - TODO: this probably means the transaction was rejected in the mempool, but we cant be sure. Perhaps we should store it in its entirety and allow the user to resubmit it.
+            // Not found - TODO: this probably means the transaction was rejected in the mempool, but we cant be sure.
+            // Perhaps we should store it in its entirety and allow the user to resubmit it.
             return Ok(Some(WalletTransaction {
                 transaction: transaction.transaction,
                 status: TransactionStatus::InvalidTransaction,
@@ -149,7 +153,7 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
             }));
         };
 
-        match resp.result {
+        match resp.execution_result {
             Some(result) => {
                 let new_status = if result.finalize.result.is_accept() && result.transaction_failure.is_none() {
                     TransactionStatus::Accepted
@@ -157,24 +161,26 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
                     TransactionStatus::Rejected
                 };
 
-                let qc_resp = client
-                    .get_transaction_quorum_certificates(GetTransactionQcsRequest { hash })
-                    .await
-                    .map_err(TransactionApiError::ValidatorNodeClientError)?;
+                // let qc_resp = self.network_interface
+                //     .fetch_transaction_quorum_certificates(GetTransactionQcsRequest { hash })
+                //     .await
+                //     .map_err(TransactionApiError::ValidatorNodeClientError)?;
 
                 self.store.with_write_tx(|tx| {
                     if !transaction.is_dry_run {
                         if let Some(diff) = result.finalize.result.accept() {
-                            self.commit_result(tx, hash, diff)?;
+                            self.commit_result(tx, transaction_id, diff)?;
                         }
                     }
 
                     tx.transactions_set_result_and_status(
-                        hash,
+                        transaction_id,
                         Some(&result.finalize),
                         result.transaction_failure.as_ref(),
                         result.fee_receipt.as_ref().map(|f| f.total_fees_charged()),
-                        Some(&qc_resp.qcs),
+                        // TODO: readd qcs
+                        None,
+                        // Some(&qc_resp.qcs),
                         new_status,
                     )?;
                     if !transaction.is_dry_run {
@@ -182,7 +188,7 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
                         // we should make sure that the account's locked outputs
                         // are either set to spent or released, depending if the
                         // transaction was finalized or rejected
-                        if let Some(proof_id) = tx.proofs_get_by_transaction_hash(hash).optional()? {
+                        if let Some(proof_id) = tx.proofs_get_by_transaction_id(transaction_id).optional()? {
                             if new_status == TransactionStatus::Accepted {
                                 tx.outputs_finalize_by_proof_id(proof_id)?;
                             } else {
@@ -199,7 +205,9 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
                     finalize: Some(result.finalize),
                     transaction_failure: result.transaction_failure,
                     final_fee: result.fee_receipt.as_ref().map(|f| f.total_fees_charged()),
-                    qcs: qc_resp.qcs,
+                    // TODO: re-add QCs
+                    // qcs: qc_resp.qcs,
+                    qcs: vec![],
                     is_dry_run: transaction.is_dry_run,
                 }))
             },
@@ -210,104 +218,58 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
     fn commit_result(
         &self,
         tx: &mut TStore::WriteTransaction<'_>,
-        tx_hash: FixedHash,
+        transaction_id: TransactionId,
         diff: &SubstateDiff,
     ) -> Result<(), TransactionApiError> {
-        let mut component = None;
-        let mut children = vec![];
-        let mut downed_children = HashMap::<_, _>::new();
-
-        for (addr, version) in diff.down_iter() {
+        for (addr, _) in diff.down_iter() {
             if addr.is_layer1_commitment() {
                 info!(target: LOG_TARGET, "Layer 1 commitment {} downed", addr);
                 continue;
             }
-            let maybe_substate = tx
-                .substates_remove(&VersionedSubstateAddress {
-                    address: addr.clone(),
-                    version: *version,
-                })
-                .optional()?;
-            match maybe_substate {
-                Some(substate) => {
-                    if let Some(parent) = substate.parent_address {
-                        downed_children.insert(substate.address.address, parent);
-                    }
-                },
-                None => {
-                    warn!(target: LOG_TARGET, "Downed substate {} not found", addr);
-                },
+
+            if tx.substates_remove(addr).optional()?.is_none() {
+                warn!(target: LOG_TARGET, "Downed substate {} not found", addr);
             }
         }
 
-        for (addr, substate) in diff.up_iter() {
-            match addr {
-                addr @ SubstateAddress::Component(_) => {
-                    let header = substate.substate_value().component().unwrap();
-                    tx.substates_insert_parent(
-                        tx_hash,
-                        VersionedSubstateAddress {
-                            address: addr.clone(),
-                            version: substate.version(),
-                        },
-                        header.module_name.clone(),
-                        header.template_address,
-                    )?;
-                    component = Some(addr);
-                },
-                addr @ SubstateAddress::Resource(_) |
-                addr @ SubstateAddress::Vault(_) |
-                addr @ SubstateAddress::NonFungible(_) |
-                addr @ SubstateAddress::NonFungibleIndex(_) => {
-                    children.push(VersionedSubstateAddress {
-                        address: addr.clone(),
-                        version: substate.version(),
-                    });
-                },
-                addr @ SubstateAddress::UnclaimedConfidentialOutput(_) => {
-                    todo!("Not supported {}", addr);
-                },
-            }
-        }
+        let (components, mut rest) = diff.up_iter().partition::<Vec<_>, _>(|(addr, _)| addr.is_component());
 
-        for ch in children {
-            match downed_children.remove(&ch.address) {
-                Some(parent) => {
-                    tx.substates_insert_child(tx_hash, parent, VersionedSubstateAddress {
-                        address: ch.address.clone(),
-                        version: ch.version,
+        for (component_addr, substate) in components {
+            let header = substate.substate_value().component().unwrap();
+
+            tx.substates_insert_root(
+                transaction_id,
+                VersionedSubstateAddress {
+                    address: component_addr.clone(),
+                    version: substate.version(),
+                },
+                Some(header.module_name.clone()),
+                Some(header.template_address),
+            )?;
+
+            let value = IndexedValue::from_raw(&header.state.state)?;
+
+            for owned_addr in value.referenced_substates() {
+                if let Some(pos) = rest.iter().position(|(addr, _)| addr == &owned_addr) {
+                    let (_, s) = rest.swap_remove(pos);
+                    tx.substates_insert_child(transaction_id, component_addr.clone(), VersionedSubstateAddress {
+                        address: owned_addr,
+                        version: s.version(),
                     })?;
-                },
-                None => {
-                    // FIXME: We dont really know what the parent is, so we just use a component from the transaction
-                    //        because this is more likely than not to be correct. Obviously this is not good enough.
-                    match component {
-                        Some(parent) => {
-                            warn!(
-                                target: LOG_TARGET,
-                                "Assuming parent component is {} for substate {} in transaction {}.",
-                                parent,
-                                ch,
-                                tx_hash
-                            );
-                            tx.substates_insert_child(tx_hash, parent.clone(), ch)?;
-                        },
-                        None => {
-                            warn!(
-                                target: LOG_TARGET,
-                                "No parent component found for substate {} in transaction {}.", ch, tx_hash
-                            );
-                            // FIXME: We don't have a component in this transaction with other upped substates.
-                            tx.substates_insert_parent(
-                                tx_hash,
-                                ch,
-                                "<unknown>".to_string(),
-                                TemplateAddress::default(),
-                            )?;
-                        },
-                    }
-                },
+                }
             }
+        }
+
+        for (addr, substate) in rest {
+            tx.substates_insert_root(
+                transaction_id,
+                VersionedSubstateAddress {
+                    address: addr.clone(),
+                    version: substate.version(),
+                },
+                None,
+                None,
+            )?;
         }
 
         Ok(())
@@ -318,8 +280,10 @@ impl<'a, TStore: WalletStore> TransactionApi<'a, TStore> {
 pub enum TransactionApiError {
     #[error("Store error: {0}")]
     StoreError(#[from] WalletStorageError),
-    #[error("Validator node client error: {0}")]
-    ValidatorNodeClientError(#[from] ValidatorNodeClientError),
+    #[error("Network interface error: {0}")]
+    NetworkInterfaceError(String),
+    #[error("Failed to extract known type data from value: {0}")]
+    ValueVisitorError(#[from] IndexedValueVisitorError),
 }
 
 impl IsNotFoundError for TransactionApiError {

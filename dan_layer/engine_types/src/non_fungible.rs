@@ -3,6 +3,9 @@
 
 use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tari_bor::{decode_exact, BorError};
+use tari_template_lib::prelude::Metadata;
+
+use crate::serde_with;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NonFungibleContainer(Option<NonFungible>);
@@ -35,7 +38,9 @@ impl NonFungibleContainer {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct NonFungible {
+    #[serde(with = "serde_with::hex")]
     data: Vec<u8>,
+    #[serde(with = "serde_with::hex")]
     mutable_data: Vec<u8>,
 }
 
@@ -54,6 +59,10 @@ impl NonFungible {
 
     pub fn decode_mutable_data<T: DeserializeOwned>(&self) -> Result<T, BorError> {
         decode_exact(&self.mutable_data)
+    }
+
+    pub fn decode_data(&self) -> Result<Metadata, BorError> {
+        decode_exact(&self.data)
     }
 
     pub fn set_mutable_data(&mut self, mutable_data: Vec<u8>) {

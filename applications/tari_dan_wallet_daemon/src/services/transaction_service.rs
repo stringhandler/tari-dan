@@ -4,9 +4,11 @@
 use std::{sync::Arc, time::Duration};
 
 use log::*;
+use tari_dan_common_types::optional::IsNotFoundError;
 use tari_dan_wallet_sdk::{
     apis::transaction::TransactionApiError,
     models::TransactionStatus,
+    network::WalletNetworkInterface,
     storage::WalletStore,
     DanWalletSdk,
 };
@@ -22,21 +24,28 @@ use crate::{
     services::{TransactionFinalizedEvent, TransactionInvalidEvent, WalletEvent},
 };
 
-const LOG_TARGET: &str = "tari::dan_wallet_daemon::transaction_service";
+const LOG_TARGET: &str = "tari::dan::wallet_daemon::transaction_service";
 
-pub struct TransactionService<TStore> {
+pub struct TransactionService<TStore, TNetworkInterface> {
     notify: Notify<WalletEvent>,
-    wallet_sdk: DanWalletSdk<TStore>,
+    wallet_sdk: DanWalletSdk<TStore, TNetworkInterface>,
     trigger_poll: watch::Sender<()>,
     rx_trigger: watch::Receiver<()>,
     poll_semaphore: Arc<Semaphore>,
     shutdown_signal: ShutdownSignal,
 }
 
-impl<TStore> TransactionService<TStore>
-where TStore: WalletStore + Clone + Send + Sync + 'static
+impl<TStore, TNetworkInterface> TransactionService<TStore, TNetworkInterface>
+where
+    TStore: WalletStore + Clone + Send + Sync + 'static,
+    TNetworkInterface: WalletNetworkInterface + Clone + Send + Sync + 'static,
+    TNetworkInterface::Error: IsNotFoundError,
 {
-    pub fn new(notify: Notify<WalletEvent>, wallet_sdk: DanWalletSdk<TStore>, shutdown_signal: ShutdownSignal) -> Self {
+    pub fn new(
+        notify: Notify<WalletEvent>,
+        wallet_sdk: DanWalletSdk<TStore, TNetworkInterface>,
+        shutdown_signal: ShutdownSignal,
+    ) -> Self {
         let (trigger, rx_trigger) = watch::channel(());
         Self {
             notify,
@@ -99,7 +108,7 @@ where TStore: WalletStore + Clone + Send + Sync + 'static
     }
 
     async fn check_pending_transactions(
-        wallet_sdk: DanWalletSdk<TStore>,
+        wallet_sdk: DanWalletSdk<TStore, TNetworkInterface>,
         notify: Notify<WalletEvent>,
     ) -> Result<(), TransactionServiceError> {
         let transaction_api = wallet_sdk.transaction_api();
@@ -122,7 +131,7 @@ where TStore: WalletStore + Clone + Send + Sync + 'static
                 transaction.transaction.hash()
             );
             let maybe_finalized_transaction = transaction_api
-                .check_and_store_finalized_transaction(transaction.transaction.hash().into_array().into())
+                .check_and_store_finalized_transaction(*transaction.transaction.id())
                 .await?;
 
             match maybe_finalized_transaction {
@@ -137,16 +146,15 @@ where TStore: WalletStore + Clone + Send + Sync + 'static
                     match transaction.finalize {
                         Some(finalize) => {
                             notify.notify(TransactionFinalizedEvent {
-                                hash: transaction.transaction.hash().into_array().into(),
+                                transaction_id: *transaction.transaction.id(),
                                 finalize,
                                 transaction_failure: transaction.transaction_failure,
                                 final_fee: transaction.final_fee.unwrap_or_default(),
-                                qcs: transaction.qcs,
                                 status: transaction.status,
                             });
                         },
                         None => notify.notify(TransactionInvalidEvent {
-                            hash: transaction.transaction.hash().into_array().into(),
+                            transaction_id: *transaction.transaction.id(),
                             status: transaction.status,
                             final_fee: transaction.final_fee.unwrap_or_default(),
                         }),
@@ -172,6 +180,7 @@ where TStore: WalletStore + Clone + Send + Sync + 'static
             WalletEvent::TransactionInvalid(_) |
             WalletEvent::TransactionFinalized(_) |
             WalletEvent::AccountChanged(_) => {},
+            WalletEvent::AuthLoginRequest(_) => {},
         }
         Ok(())
     }

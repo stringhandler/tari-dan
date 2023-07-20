@@ -87,7 +87,7 @@ impl ManifestParser {
     pub fn parse(&self, input: ParseStream) -> Result<Vec<ManifestIntent>, syn::Error> {
         let mut statements = vec![];
         statements.push(ManifestIntent::DefineTemplate {
-            template_address: ACCOUNT_TEMPLATE_ADDRESS,
+            template_address: *ACCOUNT_TEMPLATE_ADDRESS,
             alias: Ident::new("Account", proc_macro2::Span::call_site()),
         });
         for stmt in Block::parse_within(input)? {
@@ -285,12 +285,10 @@ impl ManifestParser {
                 let mac = &path.segments[0].ident;
                 macro_call(mac, tokens)
             },
-            _ => {
-                return Err(syn::Error::new_spanned(
-                    expr.clone(),
-                    format!("Only function calls are supported in let statements. {:?}", expr),
-                ))
-            },
+            _ => Err(syn::Error::new_spanned(
+                expr.clone(),
+                format!("Only function calls are supported in let statements. {:?}", expr),
+            )),
         }
     }
 }

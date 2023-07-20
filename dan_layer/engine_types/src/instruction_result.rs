@@ -24,9 +24,13 @@ use serde::{de::DeserializeOwned, Deserialize, Serialize};
 use tari_bor::BorError;
 use tari_template_abi::Type;
 
+use crate::{indexed_value::IndexedValue, serde_with};
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct InstructionResult {
+    #[serde(with = "serde_with::hex")]
     pub raw: Vec<u8>,
+    pub value: IndexedValue,
     pub return_type: Type,
 }
 
@@ -34,6 +38,7 @@ impl InstructionResult {
     pub fn empty() -> Self {
         InstructionResult {
             raw: Vec::new(),
+            value: IndexedValue::default(),
             return_type: Type::Unit,
         }
     }

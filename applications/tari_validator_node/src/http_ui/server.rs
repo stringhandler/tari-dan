@@ -20,7 +20,7 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::{net::SocketAddr, sync::Arc};
+use std::{net::SocketAddr, str::FromStr, sync::Arc};
 
 use axum::{
     http::{Response, Uri},
@@ -30,26 +30,14 @@ use axum::{
 };
 use include_dir::{include_dir, Dir};
 use log::{error, info};
-use reqwest::StatusCode;
+use reqwest::{header, header::HeaderValue, StatusCode};
 
 const LOG_TARGET: &str = "tari::validator_node::http_ui::server";
 
-pub async fn run_http_ui_server(
-    address: SocketAddr,
-    json_rpc_address: Option<SocketAddr>,
-) -> Result<(), anyhow::Error> {
+pub async fn run_http_ui_server(address: SocketAddr, json_rpc_address: SocketAddr) -> Result<(), anyhow::Error> {
     let json_rpc_address = Arc::new(json_rpc_address);
     let router = Router::new()
-        .route(
-            "/json_rpc_address",
-            get(|| async move {
-                json_rpc_address
-                    .as_ref()
-                    .as_ref()
-                    .map(|s| s.to_string())
-                    .unwrap_or_else(|| "NOT CONFIGURED".to_string())
-            }),
-        )
+        .route("/json_rpc_address", get(|| async move { json_rpc_address.to_string() }))
         .fallback(handler);
 
     info!(target: LOG_TARGET, "🕸️ HTTP UI started at {}", address);
@@ -83,7 +71,10 @@ async fn handler(uri: Uri) -> impl IntoResponse {
         .or_else(|| PROJECT_DIR.get_file("index.html"))
         .and_then(|file| file.contents_utf8())
     {
+        let mime_type = mime_guess::from_path(path).first_or_else(|| mime_guess::Mime::from_str("text/html").unwrap());
+        let content_type = mime_type.to_string();
         return Response::builder()
+            .header(header::CONTENT_TYPE, HeaderValue::from_str(&content_type).unwrap())
             .status(StatusCode::OK)
             .body(body.to_owned())
             .unwrap();

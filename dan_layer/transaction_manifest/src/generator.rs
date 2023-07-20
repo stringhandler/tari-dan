@@ -137,6 +137,8 @@ impl ManifestInstructionGenerator {
                             ManifestValue::SubstateAddress(addr) => match addr {
                                 SubstateAddress::Component(addr) => Ok(arg!(*addr)),
                                 SubstateAddress::Resource(addr) => Ok(arg!(*addr)),
+                                // TODO: should tx receipt addresses be allowed to be reference ?
+                                SubstateAddress::TransactionReceipt(addr) => Ok(arg!(*addr)),
                                 SubstateAddress::Vault(addr) => Ok(arg!(*addr)),
                                 SubstateAddress::NonFungible(addr) => Ok(arg!(addr)),
                                 SubstateAddress::UnclaimedConfidentialOutput(addr) => Ok(arg!(*addr)),
@@ -161,7 +163,7 @@ impl ManifestInstructionGenerator {
                             }
                         })?
                 },
-                ManifestLiteral::Special(SpecialLiteral::Amount(amount)) => Ok(arg!(Amount::new(amount))),
+                ManifestLiteral::Special(SpecialLiteral::Amount(amount)) => Ok(arg!(Amount(amount))),
                 ManifestLiteral::Special(SpecialLiteral::NonFungibleId(lit)) => {
                     let id = lit_to_nonfungible_id(&lit)?;
                     Ok(arg!(id))

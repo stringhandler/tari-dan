@@ -21,14 +21,9 @@
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
 mod handlers;
-pub use handlers::{
-    AddAddressRequest,
-    GetNonFungibleCountRequest,
-    GetNonFungiblesRequest,
-    GetSubstateRequest,
-    JsonRpcHandlers,
-};
+pub use handlers::JsonRpcHandlers;
 
 mod server;
+mod special_substate_encoding;
 
 pub use server::run_json_rpc;

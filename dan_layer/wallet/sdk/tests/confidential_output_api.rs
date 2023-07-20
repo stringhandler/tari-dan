@@ -1,19 +1,28 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
+use std::{convert::Infallible, time::Duration};
+
+use async_trait::async_trait;
 use tari_common_types::types::Commitment;
 use tari_crypto::commitment::HomomorphicCommitmentFactory;
 use tari_dan_common_types::optional::Optional;
 use tari_dan_wallet_sdk::{
     confidential::get_commitment_factory,
     models::{ConfidentialOutputModel, ConfidentialProofId, OutputStatus},
+    network::{SubstateQueryResult, TransactionQueryResult, WalletNetworkInterface},
     storage::{WalletStore, WalletStoreReader},
     DanWalletSdk,
     WalletSdkConfig,
 };
 use tari_dan_wallet_storage_sqlite::SqliteWalletStore;
 use tari_engine_types::substate::SubstateAddress;
-use tari_template_lib::{constants::CONFIDENTIAL_TARI_RESOURCE_ADDRESS, resource::ResourceType};
+use tari_template_lib::{
+    constants::CONFIDENTIAL_TARI_RESOURCE_ADDRESS,
+    models::{Amount, EncryptedData},
+    resource::ResourceType,
+};
+use tari_transaction::{SubstateRequirement, Transaction, TransactionId};
 
 #[test]
 fn outputs_locked_and_released() {
@@ -27,7 +36,7 @@ fn outputs_locked_and_released() {
     let (inputs, total_value) = test
         .sdk()
         .confidential_outputs_api()
-        .lock_outputs_by_amount(&Test::test_vault_address(), 50, proof_id)
+        .lock_outputs_by_amount(&Test::test_vault_address(), Amount(50), proof_id)
         .unwrap();
     assert_eq!(total_value, 74);
     assert_eq!(inputs.len(), 2);
@@ -65,7 +74,7 @@ fn outputs_locked_and_finalized() {
     let proof_id = test.new_proof();
 
     let (inputs, total_value) = outputs_api
-        .lock_outputs_by_amount(&Test::test_vault_address(), 50, proof_id)
+        .lock_outputs_by_amount(&Test::test_vault_address(), Amount(50), proof_id)
         .unwrap();
     assert_eq!(total_value, 74);
     assert_eq!(inputs.len(), 2);
@@ -89,6 +98,7 @@ fn outputs_locked_and_finalized() {
             value: 24,
             sender_public_nonce: None,
             secret_key_index: 0,
+            encrypted_data: EncryptedData([0; EncryptedData::size()]),
             public_asset_tag: None,
             status: OutputStatus::LockedUnconfirmed,
             locked_by_proof: Some(proof_id),
@@ -120,7 +130,7 @@ fn outputs_locked_and_finalized() {
 
 struct Test {
     store: SqliteWalletStore,
-    sdk: DanWalletSdk<SqliteWalletStore>,
+    sdk: DanWalletSdk<SqliteWalletStore, PanicIndexer>,
     _temp: tempfile::TempDir,
 }
 
@@ -130,20 +140,22 @@ impl Test {
         let store = SqliteWalletStore::try_open(temp.path().join("data/wallet.sqlite")).unwrap();
         store.run_migrations().unwrap();
 
-        let sdk = DanWalletSdk::initialize(store.clone(), WalletSdkConfig {
+        let sdk = DanWalletSdk::initialize(store.clone(), PanicIndexer, WalletSdkConfig {
             password: None,
-            validator_node_jrpc_endpoint: "".to_string(),
+            indexer_jrpc_endpoint: "".to_string(),
+            jwt_expiry: Duration::from_secs(60),
+            jwt_secret_key: "secret_key".to_string(),
         })
         .unwrap();
         let accounts_api = sdk.accounts_api();
         accounts_api
-            .add_account(Some("test"), &Test::test_account_address(), 0)
+            .add_account(Some("test"), &Test::test_account_address(), 0, true)
             .unwrap();
         accounts_api
             .add_vault(
                 Test::test_account_address(),
                 Test::test_vault_address(),
-                CONFIDENTIAL_TARI_RESOURCE_ADDRESS,
+                *CONFIDENTIAL_TARI_RESOURCE_ADDRESS,
                 ResourceType::Confidential,
                 Some("TEST".to_string()),
             )
@@ -179,6 +191,7 @@ impl Test {
                 value: amount,
                 sender_public_nonce: None,
                 secret_key_index: 0,
+                encrypted_data: EncryptedData([0; EncryptedData::size()]),
                 public_asset_tag: None,
                 status: OutputStatus::Unspent,
                 locked_by_proof: None,
@@ -201,11 +214,52 @@ impl Test {
             .unwrap_or(0)
     }
 
-    pub fn sdk(&self) -> &DanWalletSdk<SqliteWalletStore> {
+    pub fn sdk(&self) -> &DanWalletSdk<SqliteWalletStore, PanicIndexer> {
         &self.sdk
     }
 
     pub fn store(&self) -> &SqliteWalletStore {
         &self.store
+    }
+}
+
+#[derive(Debug, Clone)]
+struct PanicIndexer;
+
+// TODO: test the substate scanning in the SDK
+#[async_trait]
+impl WalletNetworkInterface for PanicIndexer {
+    type Error = Infallible;
+
+    async fn query_substate(
+        &self,
+        _address: &SubstateAddress,
+        _version: Option<u32>,
+        _local_search_only: bool,
+    ) -> Result<SubstateQueryResult, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn submit_transaction(
+        &self,
+        _transaction: Transaction,
+        _required_substates: Vec<SubstateRequirement>,
+    ) -> Result<TransactionId, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn submit_dry_run_transaction(
+        &self,
+        _transaction: Transaction,
+        _required_substates: Vec<SubstateRequirement>,
+    ) -> Result<TransactionQueryResult, Self::Error> {
+        unimplemented!()
+    }
+
+    async fn query_transaction_result(
+        &self,
+        _transaction_id: TransactionId,
+    ) -> Result<TransactionQueryResult, Self::Error> {
+        unimplemented!()
     }
 }

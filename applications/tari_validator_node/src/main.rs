@@ -22,7 +22,7 @@
 
 mod cli;
 
-use std::{panic, process};
+use std::{fs, panic, process};
 
 use clap::Parser;
 use log::*;
@@ -50,7 +50,10 @@ async fn main() {
         eprintln!("{:?}", err);
         error!(
             target: LOG_TARGET,
-            "Exiting with code ({}): {:?}", exit_code as i32, exit_code
+            "Exiting with code ({}) {:?}: {}",
+            exit_code as i32,
+            exit_code,
+            err.details.unwrap_or_default()
         );
         process::exit(exit_code as i32);
     }
@@ -63,6 +66,8 @@ async fn main_inner() -> Result<(), ExitError> {
     let config = ApplicationConfig::load_from(&cfg)?;
     println!("Starting validator node on network {}", config.network);
 
+    // Remove the pid file if it exists
+    let _file = fs::remove_file(config.common.base_path.join("pid"));
     let mut shutdown = Shutdown::new();
     if let Err(e) = initialize_logging(
         &cli.common.log_config_path("validator"),

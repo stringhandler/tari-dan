@@ -23,6 +23,12 @@
 use std::time::Duration;
 
 use log::*;
+use tari_base_node_client::{
+    grpc::GrpcBaseNodeClient,
+    types::{BaseLayerMetadata, BlockInfo},
+    BaseNodeClient,
+    BaseNodeClientError,
+};
 use tari_common_types::types::{Commitment, FixedHash, FixedHashSizeError};
 use tari_core::transactions::transaction_components::{
     CodeTemplateRegistration,
@@ -31,40 +37,27 @@ use tari_core::transactions::transaction_components::{
     ValidatorNodeRegistration,
 };
 use tari_crypto::tari_utilities::ByteArray;
-use tari_dan_common_types::{optional::Optional, ShardId};
-use tari_dan_core::{
-    consensus_constants::ConsensusConstants,
-    models::BaseLayerMetadata,
-    services::{
-        base_node_error::BaseNodeError,
-        epoch_manager::{EpochManager, EpochManagerError},
-        BaseNodeClient,
-        BlockInfo,
-    },
-    storage::{
-        shard_store::{ShardStore, ShardStoreWriteTransaction},
-        StorageError,
-    },
-    DigitalAssetError,
+use tari_dan_common_types::{optional::Optional, Epoch, NodeHeight};
+use tari_dan_storage::{
+    consensus_models::{Block, SubstateRecord},
+    global::{GlobalDb, MetadataKey},
+    StateStore,
+    StorageError,
 };
-use tari_dan_storage::global::{GlobalDb, MetadataKey};
-use tari_dan_storage_sqlite::{
-    error::SqliteStorageError,
-    global::SqliteGlobalDbAdapter,
-    sqlite_shard_store_factory::SqliteShardStore,
-};
+use tari_dan_storage_sqlite::{error::SqliteStorageError, global::SqliteGlobalDbAdapter};
 use tari_engine_types::{
     confidential::UnclaimedConfidentialOutput,
-    substate::{Substate, SubstateAddress, SubstateValue},
+    substate::{SubstateAddress, SubstateValue},
 };
+use tari_epoch_manager::{base_layer::EpochManagerHandle, EpochManagerError, EpochManagerReader};
 use tari_shutdown::ShutdownSignal;
-use tari_template_lib::models::{EncryptedValue, TemplateAddress, UnclaimedConfidentialOutputAddress};
+use tari_state_store_sqlite::SqliteStateStore;
+use tari_template_lib::models::{EncryptedData, TemplateAddress, UnclaimedConfidentialOutputAddress};
 use tokio::{task, task::JoinHandle, time};
 
 use crate::{
-    base_node_client::GrpcBaseNodeClient,
-    epoch_manager::EpochManagerHandle,
-    template_manager::{TemplateManagerError, TemplateManagerHandle, TemplateRegistration},
+    consensus_constants::ConsensusConstants,
+    template_manager::interface::{TemplateManagerError, TemplateManagerHandle, TemplateRegistration},
 };
 
 const LOG_TARGET: &str = "tari::dan::base_layer_scanner";
@@ -76,7 +69,7 @@ pub fn spawn(
     template_manager: TemplateManagerHandle,
     shutdown: ShutdownSignal,
     consensus_constants: ConsensusConstants,
-    shard_store: SqliteShardStore,
+    shard_store: SqliteStateStore,
     scan_base_layer: bool,
     base_layer_scanning_interval: Duration,
 ) -> JoinHandle<anyhow::Result<()>> {
@@ -109,9 +102,10 @@ pub struct BaseLayerScanner {
     template_manager: TemplateManagerHandle,
     shutdown: ShutdownSignal,
     consensus_constants: ConsensusConstants,
-    shard_store: SqliteShardStore,
+    state_store: SqliteStateStore,
     scan_base_layer: bool,
     base_layer_scanning_interval: Duration,
+    has_attempted_scan: bool,
 }
 
 impl BaseLayerScanner {
@@ -122,7 +116,7 @@ impl BaseLayerScanner {
         template_manager: TemplateManagerHandle,
         shutdown: ShutdownSignal,
         consensus_constants: ConsensusConstants,
-        state_store: SqliteShardStore,
+        state_store: SqliteStateStore,
         scan_base_layer: bool,
         base_layer_scanning_interval: Duration,
     ) -> Self {
@@ -137,9 +131,10 @@ impl BaseLayerScanner {
             template_manager,
             shutdown,
             consensus_constants,
-            shard_store: state_store,
+            state_store,
             scan_base_layer,
             base_layer_scanning_interval,
+            has_attempted_scan: false,
         }
     }
 
@@ -203,7 +198,7 @@ impl BaseLayerScanner {
                 self.sync_blockchain().await?;
             },
             BlockchainProgression::Reorged => {
-                warn!(
+                error!(
                     target: LOG_TARGET,
                     "⚠️ Base layer reorg detected. Rescanning from genesis."
                 );
@@ -214,8 +209,15 @@ impl BaseLayerScanner {
             },
             BlockchainProgression::NoProgress => {
                 trace!(target: LOG_TARGET, "No new blocks to scan.");
+                // If no progress has been made since restarting, we still need to tell the epoch manager that scanning
+                // is done
+                if !self.has_attempted_scan {
+                    self.epoch_manager.notify_scanning_complete().await?;
+                }
             },
         }
+
+        self.has_attempted_scan = false;
 
         Ok(())
     }
@@ -284,14 +286,11 @@ impl BaseLayerScanner {
                 target: LOG_TARGET,
                 "⛓️ Scanning base layer block {} of {}", block_info.height, end_height
             );
-            self.epoch_manager
-                .update_epoch(block_info.height, block_info.hash)
-                .await?;
 
             for output in utxos.outputs {
                 let output_hash = output.hash();
                 let Some(sidechain_feature) = output.features.sidechain_feature.as_ref() else {
-                    warn!(target: LOG_TARGET, "Validator node registration output must have sidechain features");
+                    warn!(target: LOG_TARGET, "Base node returned invalid data: Sidechain utxo output must have sidechain features");
                     continue;
                 };
                 match sidechain_feature {
@@ -299,7 +298,7 @@ impl BaseLayerScanner {
                         self.register_validator_node_registration(current_height, reg.clone())
                             .await?;
                     },
-                    SideChainFeature::TemplateRegistration(reg) => {
+                    SideChainFeature::CodeTemplateRegistration(reg) => {
                         self.register_code_template_registration(
                             reg.template_name.to_string(),
                             (*output_hash).into(),
@@ -325,10 +324,15 @@ impl BaseLayerScanner {
                             output_hash,
                             output.commitment.as_public_key()
                         );
-                        self.register_burnt_utxo(&output)?;
+                        self.register_burnt_utxo(&output).await?;
                     },
                 }
             }
+
+            // Once we have all the UTXO data, we "activate" the new epoch if applicable.
+            self.epoch_manager
+                .update_epoch(block_info.height, block_info.hash)
+                .await?;
 
             self.set_last_scanned_block(tip.tip_hash, &block_info)?;
 
@@ -357,22 +361,39 @@ impl BaseLayerScanner {
         Ok(())
     }
 
-    fn register_burnt_utxo(&mut self, output: &TransactionOutput) -> Result<(), BaseLayerScannerError> {
+    async fn register_burnt_utxo(&mut self, output: &TransactionOutput) -> Result<(), BaseLayerScannerError> {
         let address = SubstateAddress::UnclaimedConfidentialOutput(
             UnclaimedConfidentialOutputAddress::try_from_commitment(output.commitment.as_bytes()).map_err(|e|
                 // Technically impossible, but anyway
                 BaseLayerScannerError::InvalidSideChainUtxoResponse(format!("Invalid commitment: {}", e)))?,
         );
-        let substate = Substate::new(
-            0,
-            SubstateValue::UnclaimedConfidentialOutput(UnclaimedConfidentialOutput {
-                commitment: output.commitment.clone(),
-                encrypted_value: EncryptedValue(output.encrypted_value.0),
-            }),
-        );
-        let shard_id = ShardId::from_address(&address, 0);
-        self.shard_store
-            .with_write_tx(|tx| tx.save_burnt_utxo(&substate, address, shard_id))
+
+        let substate = SubstateValue::UnclaimedConfidentialOutput(UnclaimedConfidentialOutput {
+            commitment: output.commitment.clone(),
+            encrypted_data: EncryptedData(output.encrypted_data.to_bytes()),
+        });
+        let epoch = self.epoch_manager.current_epoch().await?;
+        self.state_store
+            .with_write_tx(|tx| {
+                let genesis = Block::genesis(epoch);
+
+                SubstateRecord {
+                    address,
+                    version: 0,
+                    substate_value: substate,
+                    state_hash: Default::default(),
+                    created_by_transaction: Default::default(),
+                    created_justify: *genesis.justify().id(),
+                    created_block: *genesis.id(),
+                    created_height: NodeHeight::zero(),
+                    destroyed_by_transaction: None,
+                    destroyed_justify: None,
+                    destroyed_by_block: None,
+                    created_at_epoch: Epoch(0),
+                    destroyed_at_epoch: None,
+                }
+                .create(tx)
+            })
             .map_err(|source| BaseLayerScannerError::CouldNotRegisterBurntUtxo {
                 commitment: Box::new(output.commitment.clone()),
                 source,
@@ -444,14 +465,12 @@ pub enum BaseLayerScannerError {
     FixedHashSizeError(#[from] FixedHashSizeError),
     #[error("Storage error: {0}")]
     SqliteStorageError(#[from] SqliteStorageError),
-    #[error("DigitalAsset error: {0}")]
-    DigitalAssetError(#[from] DigitalAssetError),
     #[error("Epoch manager error: {0}")]
     EpochManagerError(#[from] EpochManagerError),
     #[error("Template manager error: {0}")]
     TemplateManagerError(#[from] TemplateManagerError),
     #[error("Base node client error: {0}")]
-    BaseNodeError(#[from] BaseNodeError),
+    BaseNodeError(#[from] BaseNodeClientError),
     #[error("Invalid side chain utxo response: {0}")]
     InvalidSideChainUtxoResponse(String),
     #[error("Could not register burnt UTXO because {source}")]

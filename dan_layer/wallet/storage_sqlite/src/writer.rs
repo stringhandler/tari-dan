@@ -10,7 +10,7 @@ use std::{
 use chrono::NaiveDateTime;
 use diesel::{
     sql_query,
-    sql_types::{BigInt, Bool, Integer, Nullable, Text},
+    sql_types::{BigInt, Bool, Text},
     OptionalExtension,
     QueryDsl,
     RunQueryDsl,
@@ -18,8 +18,8 @@ use diesel::{
 };
 use log::*;
 use serde::Serialize;
-use tari_common_types::types::{Commitment, FixedHash, PublicKey};
-use tari_dan_common_types::QuorumCertificate;
+use tari_common_types::types::{Commitment, PublicKey};
+use tari_dan_storage::consensus_models::QuorumCertificate;
 use tari_dan_wallet_sdk::{
     models::{
         ConfidentialOutputModel,
@@ -37,11 +37,17 @@ use tari_engine_types::{
     substate::SubstateAddress,
     TemplateAddress,
 };
-use tari_template_lib::{models::Amount, Hash};
-use tari_transaction::Transaction;
+use tari_template_lib::models::{Amount, EncryptedData};
+use tari_transaction::{Transaction, TransactionId};
 use tari_utilities::hex::Hex;
 
-use crate::{diesel::ExpressionMethods, models, reader::ReadTransaction, serialization::serialize_json};
+use crate::{
+    diesel::ExpressionMethods,
+    models::{self, InputsAndOutputs},
+    reader::ReadTransaction,
+    schema::auth_status,
+    serialization::serialize_json,
+};
 
 const LOG_TARGET: &str = "auth::tari::dan::wallet_sdk::storage_sqlite::writer";
 
@@ -67,6 +73,76 @@ impl WalletStoreWriter for WriteTransaction<'_> {
 
     fn rollback(mut self) -> Result<(), WalletStorageError> {
         self.transaction.rollback()?;
+        Ok(())
+    }
+
+    fn jwt_add_empty_token(&mut self) -> Result<u64, WalletStorageError> {
+        diesel::insert_into(auth_status::table)
+            .values((auth_status::user_decided.eq(false), auth_status::granted.eq(false)))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("jwt_add_empty_token", e))?;
+        let last_inserted_id: i32 =
+            diesel::select(diesel::dsl::sql::<diesel::sql_types::Integer>("last_insert_rowid()"))
+                .get_result(self.connection())
+                .unwrap();
+        Ok(last_inserted_id as u64)
+    }
+
+    fn jwt_store_decision(&mut self, id: u64, permissions_token: Option<String>) -> Result<(), WalletStorageError> {
+        // let values = match token {
+        //     Some(token) => (auth_status::user_decided.eq(true),auth_status::granted.eq(true),auth_status::token)
+        // }
+        diesel::update(auth_status::table)
+            .set((
+                auth_status::user_decided.eq(true),
+                auth_status::granted.eq(permissions_token.is_some()),
+                permissions_token.map(|token| auth_status::token.eq(token)),
+            ))
+            .filter(auth_status::id.eq(id as i32))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("jwt_store_decision", e))?;
+        Ok(())
+    }
+
+    fn jwt_is_revoked(&mut self, token: &str) -> Result<bool, WalletStorageError> {
+        let revoked = auth_status::table
+            .select(auth_status::revoked)
+            .filter(auth_status::token.eq(token))
+            .first(self.connection())
+            .optional()
+            .map_err(|e| WalletStorageError::general("jwt_is_revoked", e))?;
+        match revoked {
+            Some(revoked) => Ok(revoked),
+            None => {
+                // We don't know this token. Store it as not revoked. Weirdly if the token is used with different daemon
+                // it will work even if it's revoked in this one. But since the user will need to confirm any actions
+                // there should be no security issue.
+                diesel::insert_into(auth_status::table)
+                    .values((
+                        auth_status::granted.eq(true),
+                        auth_status::user_decided.eq(true),
+                        auth_status::token.eq(token),
+                    ))
+                    .execute(self.connection())
+                    .map_err(|e| WalletStorageError::general("jwt_is_revoked", e))?;
+                Ok(false)
+            },
+        }
+    }
+
+    fn jwt_revoke(&mut self, token: &str) -> Result<(), WalletStorageError> {
+        if diesel::update(auth_status::table)
+            .set(auth_status::revoked.eq(true))
+            .filter(auth_status::token.eq(token))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("jwt_revoke", e))? ==
+            0
+        {
+            diesel::insert_into(auth_status::table)
+                .values((auth_status::revoked.eq(true), auth_status::token.eq(token)))
+                .execute(self.connection())
+                .map_err(|e| WalletStorageError::general("jwt_revoke", e))?;
+        }
         Ok(())
     }
 
@@ -177,21 +253,19 @@ impl WalletStoreWriter for WriteTransaction<'_> {
     fn transactions_insert(&mut self, transaction: &Transaction, is_dry_run: bool) -> Result<(), WalletStorageError> {
         use crate::schema::transactions;
 
-        let status = if is_dry_run {
-            TransactionStatus::DryRun
-        } else {
-            TransactionStatus::New
-        };
-
         diesel::insert_into(transactions::table)
             .values((
-                transactions::hash.eq(transaction.hash().to_string()),
+                transactions::hash.eq(transaction.id().to_string()),
                 transactions::fee_instructions.eq(serialize_json(transaction.fee_instructions())?),
                 transactions::instructions.eq(serialize_json(transaction.instructions())?),
-                transactions::sender_address.eq(transaction.sender_public_key().to_hex()),
-                transactions::signature.eq(serialize_json(transaction.signature())?),
-                transactions::meta.eq(serialize_json(transaction.meta())?),
-                transactions::status.eq(status.as_key_str()),
+                transactions::sender_public_key.eq(transaction.signer_public_key().to_hex()),
+                transactions::signature.eq(serialize_json(transaction.signature().signature())?),
+                transactions::meta.eq(serialize_json(&InputsAndOutputs {
+                    inputs: transaction.inputs().to_vec(),
+                    input_refs: transaction.input_refs().to_vec(),
+                    outputs: transaction.outputs().to_vec(),
+                })?),
+                transactions::status.eq(TransactionStatus::default().as_key_str()),
                 transactions::dry_run.eq(is_dry_run),
             ))
             .execute(self.connection())
@@ -202,7 +276,7 @@ impl WalletStoreWriter for WriteTransaction<'_> {
 
     fn transactions_set_result_and_status(
         &mut self,
-        hash: FixedHash,
+        transaction_id: TransactionId,
         result: Option<&FinalizeResult>,
         transaction_failure: Option<&RejectReason>,
         final_fee: Option<Amount>,
@@ -220,7 +294,7 @@ impl WalletStoreWriter for WriteTransaction<'_> {
                 transactions::qcs.eq(qcs.map(serialize_json).transpose()?),
                 transactions::updated_at.eq(diesel::dsl::now),
             ))
-            .filter(transactions::hash.eq(hash.to_string()))
+            .filter(transactions::hash.eq(transaction_id.to_string()))
             .execute(self.connection())
             .map_err(|e| WalletStorageError::general("transactions_set_result_and_status", e))?;
 
@@ -228,7 +302,7 @@ impl WalletStoreWriter for WriteTransaction<'_> {
             return Err(WalletStorageError::NotFound {
                 operation: "transactions_set_result_and_status",
                 entity: "transaction".to_string(),
-                key: hash.to_string(),
+                key: transaction_id.to_string(),
             });
         }
 
@@ -236,54 +310,56 @@ impl WalletStoreWriter for WriteTransaction<'_> {
     }
 
     // -------------------------------- Substates -------------------------------- //
-
-    fn substates_insert_parent(
+    fn substates_insert_root(
         &mut self,
-        tx_hash: FixedHash,
-        substate: VersionedSubstateAddress,
-        module_name: String,
-        template_addr: TemplateAddress,
+        transaction_id: TransactionId,
+        address: VersionedSubstateAddress,
+        module_name: Option<String>,
+        template_addr: Option<TemplateAddress>,
     ) -> Result<(), WalletStorageError> {
-        sql_query(
-            "INSERT INTO substates (module_name, address, parent_address, transaction_hash, template_address, \
-             version) VALUES (?, ?, ?, ?, ?, ?)",
-        )
-        .bind::<Nullable<Text>, _>(Some(module_name))
-        .bind::<Text, _>(substate.address.to_string())
-        .bind::<Nullable<Text>, _>(None::<String>)
-        .bind::<Text, _>(tx_hash.to_string())
-        .bind::<Nullable<Text>, _>(Some(template_addr.to_string()))
-        .bind::<Integer, _>(substate.version as i32)
-        .execute(self.connection())
-        .map_err(|e| WalletStorageError::general("substates_insert", e))?;
+        use crate::schema::substates;
+
+        diesel::insert_into(substates::table)
+            .values((
+                substates::address.eq(address.address.to_string()),
+                substates::transaction_hash.eq(transaction_id.to_string()),
+                substates::module_name.eq(module_name),
+                substates::template_address.eq(template_addr.map(|a| a.to_string())),
+                substates::version.eq(address.version as i32),
+            ))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("substates_insert_root", e))?;
 
         Ok(())
     }
 
     fn substates_insert_child(
         &mut self,
-        tx_hash: FixedHash,
+        transaction_id: TransactionId,
         parent: SubstateAddress,
         child: VersionedSubstateAddress,
     ) -> Result<(), WalletStorageError> {
-        sql_query("INSERT INTO substates (transaction_hash, address, parent_address, version) VALUES (?, ?, ?, ?)")
-            .bind::<Text, _>(tx_hash.to_string())
-            .bind::<Text, _>(child.address.to_string())
-            .bind::<Nullable<Text>, _>(Some(parent.to_string()))
-            .bind::<Integer, _>(child.version as i32)
+        use crate::schema::substates;
+
+        diesel::insert_into(substates::table)
+            .values((
+                substates::address.eq(child.address.to_string()),
+                substates::transaction_hash.eq(transaction_id.to_string()),
+                substates::parent_address.eq(Some(parent.to_string())),
+                substates::version.eq(child.version as i32),
+            ))
             .execute(self.connection())
-            .map_err(|e| WalletStorageError::general("substates_insert", e))?;
+            .map_err(|e| WalletStorageError::general("substates_insert_child", e))?;
+
         Ok(())
     }
 
-    fn substates_remove(
-        &mut self,
-        substate_addr: &VersionedSubstateAddress,
-    ) -> Result<SubstateModel, WalletStorageError> {
-        let substate = self.transaction.substates_get(&substate_addr.address)?;
-        let num_rows = sql_query("DELETE FROM substates WHERE address = ? AND version = ?")
-            .bind::<Text, _>(substate_addr.address.to_string())
-            .bind::<Integer, _>(substate_addr.version as i32)
+    fn substates_remove(&mut self, substate_addr: &SubstateAddress) -> Result<SubstateModel, WalletStorageError> {
+        use crate::schema::substates;
+
+        let substate = self.transaction.substates_get(substate_addr)?;
+        let num_rows = diesel::delete(substates::table)
+            .filter(substates::address.eq(substate_addr.to_string()))
             .execute(self.connection())
             .map_err(|e| WalletStorageError::general("substates_remove", e))?;
 
@@ -300,16 +376,50 @@ impl WalletStoreWriter for WriteTransaction<'_> {
 
     // -------------------------------- Accounts -------------------------------- //
 
+    fn accounts_set_default(&mut self, address: &SubstateAddress) -> Result<(), WalletStorageError> {
+        use crate::schema::accounts;
+
+        diesel::update(accounts::table)
+            .set(accounts::is_default.eq(false))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("accounts_set_default clear previous default", e))?;
+
+        let num_rows = diesel::update(accounts::table)
+            .set(accounts::is_default.eq(true))
+            .filter(accounts::address.eq(address.to_string()))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("accounts_set_default", e))?;
+
+        if num_rows == 0 {
+            return Err(WalletStorageError::NotFound {
+                operation: "accounts_set_default",
+                entity: "account".to_string(),
+                key: address.to_string(),
+            });
+        }
+
+        Ok(())
+    }
+
     fn accounts_insert(
         &mut self,
         account_name: &str,
         address: &SubstateAddress,
         owner_key_index: u64,
+        is_default: bool,
     ) -> Result<(), WalletStorageError> {
-        sql_query("INSERT INTO accounts (name, address, owner_key_index) VALUES (?, ?, ?)")
+        if is_default {
+            diesel::update(crate::schema::accounts::table)
+                .set(crate::schema::accounts::is_default.eq(false))
+                .execute(self.connection())
+                .map_err(|e| WalletStorageError::general("accounts_insert clear previous default", e))?;
+        }
+
+        sql_query("INSERT INTO accounts (name, address, owner_key_index, is_default) VALUES (?, ?, ?, ?)")
             .bind::<Text, _>(account_name)
             .bind::<Text, _>(address.to_string())
             .bind::<BigInt, _>(owner_key_index as i64)
+            .bind::<Bool, _>(is_default)
             .execute(self.connection())
             .map_err(|e| WalletStorageError::general("accounts_insert", e))?;
 
@@ -460,6 +570,13 @@ impl WalletStoreWriter for WriteTransaction<'_> {
                 .sender_public_nonce
                 .map(|nonce| PublicKey::from_hex(&nonce).unwrap()),
             secret_key_index: locked_output.secret_key_index as u64,
+            encrypted_data: EncryptedData::try_from(locked_output.encrypted_data.as_slice()).map_err(|_| {
+                WalletStorageError::DecodingError {
+                    operation: "outputs_lock_smallest_amount",
+                    item: "encrypted data",
+                    details: "Corrupt db: invalid encrypted data".to_string(),
+                }
+            })?,
             public_asset_tag: None,
             status: OutputStatus::Locked,
             locked_by_proof: Some(locked_by_proof),
@@ -489,6 +606,7 @@ impl WalletStoreWriter for WriteTransaction<'_> {
                 outputs::value.eq(output.value as i64),
                 outputs::sender_public_nonce.eq(output.sender_public_nonce.map(|pk| pk.to_hex())),
                 outputs::secret_key_index.eq(output.secret_key_index as i64),
+                outputs::encrypted_data.eq(output.encrypted_data.as_ref()),
                 outputs::status.eq(output.status.as_key_str()),
                 outputs::locked_by_proof.eq(output.locked_by_proof.map(|v| v as i32)),
             ))
@@ -589,18 +707,61 @@ impl WalletStoreWriter for WriteTransaction<'_> {
         Ok(())
     }
 
-    fn proofs_set_transaction_hash(
+    fn proofs_set_transaction_id(
         &mut self,
         proof_id: ConfidentialProofId,
-        transaction_hash: Hash,
+        transaction_id: TransactionId,
     ) -> Result<(), WalletStorageError> {
         use crate::schema::proofs;
 
         diesel::update(proofs::table.filter(proofs::id.eq(proof_id as i32)))
-            .set(proofs::transaction_hash.eq(transaction_hash.to_string()))
+            .set(proofs::transaction_hash.eq(transaction_id.to_string()))
             .execute(self.connection())
             .map_err(|e| WalletStorageError::general("proofs_set_transaction_hash", e))?;
 
+        Ok(())
+    }
+
+    // -------------------------------- Non fungible tokens -------------------------------- //
+    fn non_fungible_token_insert(
+        &mut self,
+        non_fungible_token: &tari_dan_wallet_sdk::models::NonFungibleToken,
+    ) -> Result<(), WalletStorageError> {
+        use crate::schema::{non_fungible_tokens, vaults};
+
+        info!(
+            target: "tari::dan::wallet_daemon::account_monitor",
+            "Inserting new non fungible token with id = {}", non_fungible_token.nft_id
+        );
+
+        let metadata =
+            serde_json::to_string(&non_fungible_token.metadata).map_err(|e| WalletStorageError::DecodingError {
+                operation: "non_fungible_token_insert",
+                item: "non_fungible_tokens",
+                details: e.to_string(),
+            })?;
+
+        let vault_id = vaults::table
+            .select(vaults::id)
+            .filter(vaults::address.eq(non_fungible_token.vault_id.to_string()))
+            .first::<i32>(self.connection())
+            .map_err(|e| WalletStorageError::general("proof_insert", e))?;
+
+        diesel::insert_into(non_fungible_tokens::table)
+            .values((
+                non_fungible_tokens::nft_id.eq(non_fungible_token.nft_id.to_canonical_string()),
+                non_fungible_tokens::metadata.eq(metadata),
+                non_fungible_tokens::vault_id.eq(vault_id),
+                non_fungible_tokens::is_burned.eq(non_fungible_token.is_burned),
+                non_fungible_tokens::token_symbol.eq(non_fungible_token.token_symbol.clone()),
+            ))
+            .execute(self.connection())
+            .map_err(|e| WalletStorageError::general("non_fungible_token_insert", e))?;
+
+        info!(
+            target: LOG_TARGET,
+            "Inserted successfully new non fungible token with id = {}", non_fungible_token.nft_id
+        );
         Ok(())
     }
 }

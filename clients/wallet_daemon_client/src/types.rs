@@ -20,97 +20,140 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
-use tari_common_types::types::{FixedHash, PublicKey};
-use tari_dan_common_types::{serde_with, QuorumCertificate, ShardId};
-use tari_dan_wallet_sdk::models::{Account, ConfidentialProofId, TransactionStatus, VersionedSubstateAddress};
+use tari_common_types::types::PublicKey;
+use tari_dan_common_types::ShardId;
+use tari_dan_wallet_sdk::{
+    apis::jwt::JrpcPermissions,
+    models::{Account, ConfidentialProofId, TransactionStatus},
+};
 use tari_engine_types::{
-    commit_result::{FinalizeResult, RejectReason},
+    commit_result::{ExecuteResult, FinalizeResult, RejectReason},
     instruction::Instruction,
     instruction_result::InstructionResult,
+    serde_with,
     substate::SubstateAddress,
+    TemplateAddress,
 };
 use tari_template_lib::{
     args::Arg,
     auth::AccessRules,
-    models::{Amount, ComponentAddress, ConfidentialOutputProof, NonFungibleId, ResourceAddress},
+    models::{Amount, ConfidentialOutputProof, NonFungibleId, ResourceAddress},
     prelude::{ConfidentialWithdrawProof, ResourceType},
 };
-use tari_transaction::Transaction;
+use tari_transaction::{SubstateRequirement, Transaction, TransactionId};
+
+use crate::{
+    serialize::{opt_string_or_struct, string_or_struct},
+    ComponentAddressOrName,
+};
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct CallInstructionRequest {
+    pub instruction: Instruction,
+    #[serde(deserialize_with = "string_or_struct")]
+    pub fee_account: ComponentAddressOrName,
+    #[serde(default, deserialize_with = "opt_string_or_struct")]
+    pub dump_outputs_into: Option<ComponentAddressOrName>,
+    pub fee: u64,
+    #[serde(default)]
+    pub inputs: Vec<SubstateRequirement>,
+    #[serde(default)]
+    pub override_inputs: Option<bool>,
+    #[serde(default)]
+    pub new_outputs: Option<u8>,
+    #[serde(default)]
+    pub specific_non_fungible_outputs: Vec<(ResourceAddress, NonFungibleId)>,
+    #[serde(default)]
+    pub new_resources: Vec<(TemplateAddress, String)>,
+    #[serde(default)]
+    pub new_non_fungible_outputs: Vec<(ResourceAddress, u8)>,
+    #[serde(default)]
+    pub new_non_fungible_index_outputs: Vec<(ResourceAddress, u64)>,
+    #[serde(default)]
+    pub is_dry_run: bool,
+    #[serde(default)]
+    pub proof_ids: Vec<ConfidentialProofId>,
+}
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionSubmitRequest {
     pub signing_key_index: Option<u64>,
     pub fee_instructions: Vec<Instruction>,
     pub instructions: Vec<Instruction>,
-    pub inputs: Vec<VersionedSubstateAddress>,
+    pub inputs: Vec<SubstateRequirement>,
     pub override_inputs: bool,
+
+    // TODO: all of these are ignored
     pub new_outputs: u8,
     pub specific_non_fungible_outputs: Vec<(ResourceAddress, NonFungibleId)>,
+    pub new_resources: Vec<(TemplateAddress, String)>,
     pub new_non_fungible_outputs: Vec<(ResourceAddress, u8)>,
     pub new_non_fungible_index_outputs: Vec<(ResourceAddress, u64)>,
+
     pub is_dry_run: bool,
     pub proof_ids: Vec<ConfidentialProofId>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionSubmitResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
-    pub inputs: Vec<ShardId>,
-    pub outputs: Vec<ShardId>,
+    pub transaction_id: TransactionId,
+    pub inputs: Vec<SubstateRequirement>,
+    pub result: Option<ExecuteResult>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionGetRequest {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
-}
-
-#[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct TransactionClaimBurnRequest {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionGetResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
     pub transaction: Transaction,
     pub result: Option<FinalizeResult>,
     pub status: TransactionStatus,
+    pub transaction_failure: Option<RejectReason>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TransactionGetAllRequest {
+    pub status: Option<TransactionStatus>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TransactionGetAllResponse {
+    pub transactions: Vec<(
+        Transaction,
+        Option<FinalizeResult>,
+        TransactionStatus,
+        Option<RejectReason>,
+    )>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionGetResultRequest {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionGetResultResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub result: Option<FinalizeResult>,
-    // TODO: Always None
-    pub qc: Option<QuorumCertificate>,
     pub status: TransactionStatus,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionWaitResultRequest {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub timeout_secs: Option<u64>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionWaitResultResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub result: Option<FinalizeResult>,
-    pub qcs: Vec<QuorumCertificate>,
     pub status: TransactionStatus,
     pub transaction_failure: Option<RejectReason>,
     pub final_fee: Amount,
@@ -119,8 +162,7 @@ pub struct TransactionWaitResultResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct TransactionClaimBurnResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub inputs: Vec<ShardId>,
     pub outputs: Vec<ShardId>,
 }
@@ -155,9 +197,9 @@ pub struct KeysCreateResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AccountsCreateRequest {
     pub account_name: Option<String>,
-    pub signing_key_index: Option<u64>,
     pub custom_access_rules: Option<AccessRules>,
-    pub fee: Option<u64>,
+    pub fee: Option<Amount>,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -169,10 +211,11 @@ pub struct AccountsCreateResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AccountsInvokeRequest {
-    pub account_name: String,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
     pub method: String,
     pub args: Vec<Arg>,
-    pub fee: Amount,
+    pub fee: Option<Amount>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -187,14 +230,23 @@ pub struct AccountsListRequest {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountInfo {
+    pub account: Account,
+    pub public_key: PublicKey,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AccountsListResponse {
-    pub accounts: Vec<(Account, PublicKey)>,
+    pub accounts: Vec<AccountInfo>,
     pub total: u64,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct AccountsGetBalancesRequest {
-    pub account_name: String,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
+    #[serde(default)]
+    pub refresh: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -206,6 +258,7 @@ pub struct AccountsGetBalancesResponse {
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct BalanceEntry {
     pub vault_address: SubstateAddress,
+    #[serde(with = "serde_with::string")]
     pub resource_address: ResourceAddress,
     pub balance: Amount,
     pub resource_type: ResourceType,
@@ -237,21 +290,55 @@ impl BalanceEntry {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AccountByNameRequest {
-    pub name: String,
+pub struct AccountGetRequest {
+    #[serde(deserialize_with = "string_or_struct")]
+    pub name_or_address: ComponentAddressOrName,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
-pub struct AccountByNameResponse {
+pub struct AccountGetDefaultRequest {
+    // Intentionally empty. Fields may be added in the future.
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountGetResponse {
     pub account: Account,
     pub public_key: PublicKey,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountSetDefaultRequest {
+    #[serde(deserialize_with = "string_or_struct")]
+    pub account: ComponentAddressOrName,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AccountSetDefaultResponse {}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TransferRequest {
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
+    pub amount: Amount,
+    pub resource_address: ResourceAddress,
+    pub destination_public_key: PublicKey,
+    pub fee: Option<Amount>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct TransferResponse {
+    pub transaction_id: TransactionId,
+    pub fee: Amount,
+    pub result: FinalizeResult,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ProofsGenerateRequest {
     pub amount: Amount,
     pub reveal_amount: Amount,
-    pub source_account_name: String,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
+    // TODO: #[serde(deserialize_with = "string_or_struct")]
     pub resource_address: ResourceAddress,
     // TODO: For now, we assume that this is obtained "somehow" from the destination account
     pub destination_public_key: PublicKey,
@@ -288,33 +375,32 @@ pub struct ConfidentialCreateOutputProofResponse {
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfidentialTransferRequest {
-    pub account: ComponentAddress,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
     pub amount: Amount,
     pub resource_address: ResourceAddress,
-    pub destination_account: ComponentAddress,
     pub destination_public_key: PublicKey,
-    pub fee: Amount,
+    pub fee: Option<Amount>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ConfidentialTransferResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub fee: Amount,
     pub result: FinalizeResult,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaimBurnRequest {
-    pub account: ComponentAddress,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
     pub claim_proof: serde_json::Value,
-    pub fee: Amount,
+    pub fee: Option<Amount>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct ClaimBurnResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub fee: Amount,
     pub result: FinalizeResult,
 }
@@ -325,19 +411,138 @@ pub struct ProofsCancelResponse {}
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RevealFundsRequest {
     /// Account with funds to reveal
-    pub account: ComponentAddress,
+    #[serde(deserialize_with = "opt_string_or_struct")]
+    pub account: Option<ComponentAddressOrName>,
     /// Amount to reveal
     pub amount_to_reveal: Amount,
     /// Pay fee from revealed funds. If false, previously revealed funds in the account are used.
     pub pay_fee_from_reveal: bool,
     /// The amount of fees to add to the transaction. Any fees not charged are refunded.
-    pub fee: Amount,
+    pub fee: Option<Amount>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct RevealFundsResponse {
-    #[serde(with = "serde_with::hex")]
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub fee: Amount,
     pub result: FinalizeResult,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountsCreateFreeTestCoinsRequest {
+    pub account: Option<ComponentAddressOrName>,
+    pub amount: Amount,
+    pub fee: Option<Amount>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountsCreateFreeTestCoinsResponse {
+    pub transaction_id: TransactionId,
+    pub amount: Amount,
+    pub fee: Amount,
+    pub result: FinalizeResult,
+    pub public_key: PublicKey,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebRtcStart {
+    pub jwt: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebRtcStartRequest {
+    pub signaling_server_token: String,
+    pub permissions: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct WebRtcStartResponse {}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginRequest {
+    pub permissions: JrpcPermissions,
+    pub duration: Option<Duration>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginResponse {
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginAcceptRequest {
+    pub auth_token: String,
+    pub name: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginAcceptResponse {
+    pub permissions_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginDenyRequest {
+    pub auth_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthLoginDenyResponse {}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthRevokeTokenRequest {
+    pub permission_token: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthRevokeTokenResponse {}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MintAccountNftRequest {
+    pub account: ComponentAddressOrName,
+    pub token_symbol: String,
+    pub metadata: serde_json::Value,
+    pub mint_fee: Option<Amount>,
+    pub create_account_nft_fee: Option<Amount>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct MintAccountNftResponse {
+    pub nft_id: NonFungibleId,
+    pub resource_address: ResourceAddress,
+    pub result: FinalizeResult,
+    pub fee: Amount,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct GetAccountNftRequest {
+    pub nft_id: NonFungibleId,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AccountNftInfo {
+    pub token_symbol: String,
+    pub metadata: serde_json::Value,
+    pub is_burned: bool,
+}
+
+pub type GetAccountNftResponse = AccountNftInfo;
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListAccountNftRequest {
+    pub limit: u64,
+    pub offset: u64,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct ListAccountNftResponse {
+    pub nfts: Vec<AccountNftInfo>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthGetAllJwtRequest {}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct AuthGetAllJwtResponse {
+    pub jwt: Vec<(i32, String)>,
 }

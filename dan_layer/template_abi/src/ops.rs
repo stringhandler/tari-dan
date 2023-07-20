@@ -34,6 +34,10 @@ pub enum EngineOp {
     NonFungibleInvoke = 0x06,
     GenerateUniqueId = 0x07,
     ConsensusInvoke = 0x08,
+    CallerContextInvoke = 0x09,
+    GenerateRandomInvoke = 0x0A,
+    EmitEvent = 0x0B,
+    CallInvoke = 0x0C,
 }
 
 impl EngineOp {
@@ -48,6 +52,10 @@ impl EngineOp {
             0x06 => Some(EngineOp::NonFungibleInvoke),
             0x07 => Some(EngineOp::GenerateUniqueId),
             0x08 => Some(EngineOp::ConsensusInvoke),
+            0x09 => Some(EngineOp::CallerContextInvoke),
+            0x0A => Some(EngineOp::GenerateRandomInvoke),
+            0x0B => Some(EngineOp::EmitEvent),
+            0x0C => Some(EngineOp::CallInvoke),
             _ => None,
         }
     }

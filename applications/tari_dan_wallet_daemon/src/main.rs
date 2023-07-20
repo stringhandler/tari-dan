@@ -20,26 +20,41 @@
 // WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::error::Error;
+use std::{fs, panic, process};
 
-use tari_common::initialize_logging;
-use tari_dan_wallet_daemon::{cli::Cli, run_tari_dan_wallet_daemon};
+use tari_common::{initialize_logging, load_configuration};
+use tari_dan_wallet_daemon::{cli::Cli, config::ApplicationConfig, run_tari_dan_wallet_daemon};
 use tari_shutdown::Shutdown;
 
 #[tokio::main]
-async fn main() -> Result<(), Box<dyn Error>> {
+async fn main() -> Result<(), anyhow::Error> {
+    // Setup a panic hook which prints the default rust panic message but also exits the process. This makes a panic in
+    // any thread "crash" the system instead of silently continuing.
+    let default_hook = panic::take_hook();
+    panic::set_hook(Box::new(move |info| {
+        default_hook(info);
+        process::exit(1);
+    }));
+
     let cli = Cli::init();
+    let config_path = cli.common.config_path();
+    let cfg = load_configuration(config_path, true, &cli)?;
+    let config = ApplicationConfig::load_from(&cfg)?;
+
+    // Remove the file if it was left behind by a previous run
+    let _file = fs::remove_file(config.common.base_path.join("pid"));
 
     let shutdown = Shutdown::new();
     let shutdown_signal = shutdown.to_signal();
 
     if let Err(e) = initialize_logging(
-        cli.base_dir().join("config/logs.yml").as_path(),
-        &cli.base_dir(),
+        &cli.common.log_config_path("dan_wallet_daemon"),
+        &cli.common.get_base_path(),
         include_str!("../log4rs_sample.yml"),
     ) {
         eprintln!("{}", e);
+        return Err(e.into());
     }
 
-    run_tari_dan_wallet_daemon(cli, shutdown_signal).await
+    run_tari_dan_wallet_daemon(config, shutdown_signal).await
 }

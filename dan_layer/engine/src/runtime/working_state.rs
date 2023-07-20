@@ -6,7 +6,9 @@ use std::collections::HashMap;
 use tari_dan_common_types::optional::Optional;
 use tari_engine_types::{
     bucket::Bucket,
+    component::ComponentHeader,
     confidential::UnclaimedConfidentialOutput,
+    events::Event,
     logs::LogEntry,
     non_fungible::NonFungibleContainer,
     non_fungible_index::NonFungibleIndex,
@@ -17,7 +19,6 @@ use tari_engine_types::{
 use tari_template_lib::models::{
     BucketId,
     ComponentAddress,
-    ComponentHeader,
     NonFungibleAddress,
     NonFungibleIndexAddress,
     ResourceAddress,
@@ -25,6 +26,7 @@ use tari_template_lib::models::{
     VaultId,
 };
 
+use super::workspace::Workspace;
 use crate::{
     runtime::{RuntimeError, RuntimeState, TransactionCommitError},
     state_store::{memory::MemoryStateStore, AtomicDb, StateReader},
@@ -32,6 +34,7 @@ use crate::{
 
 #[derive(Debug, Clone)]
 pub(super) struct WorkingState {
+    pub events: Vec<Event>,
     pub logs: Vec<LogEntry>,
     pub buckets: HashMap<BucketId, Bucket>,
     // These could be "new_substates"
@@ -44,13 +47,14 @@ pub(super) struct WorkingState {
 
     pub runtime_state: Option<RuntimeState>,
     pub last_instruction_output: Option<Vec<u8>>,
-    pub workspace: HashMap<Vec<u8>, Vec<u8>>,
+    pub workspace: Workspace,
     pub state_store: MemoryStateStore,
 }
 
 impl WorkingState {
     pub fn new(state_store: MemoryStateStore) -> Self {
         Self {
+            events: Vec::new(),
             logs: Vec::new(),
             buckets: HashMap::new(),
             new_resources: HashMap::new(),
@@ -61,7 +65,7 @@ impl WorkingState {
             new_non_fungible_indexes: HashMap::new(),
             runtime_state: None,
             last_instruction_output: None,
-            workspace: HashMap::new(),
+            workspace: Workspace::default(),
             state_store,
         }
     }

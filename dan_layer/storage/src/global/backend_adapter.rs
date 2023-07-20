@@ -20,13 +20,21 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use serde::{de::DeserializeOwned, Serialize};
+use std::{
+    collections::{HashMap, HashSet},
+    ops::RangeInclusive,
+};
 
-use super::{validator_node_db::DbValidatorNode, DbEpoch};
+use serde::{de::DeserializeOwned, Serialize};
+use tari_common_types::types::PublicKey;
+use tari_dan_common_types::{committee::Committee, Epoch, ShardId};
+
+use super::DbEpoch;
 use crate::{
     atomic::AtomicDb,
     global::{
         metadata_db::MetadataKey,
+        models::ValidatorNode,
         template_db::{DbTemplate, DbTemplateUpdate},
     },
 };
@@ -48,6 +56,11 @@ pub trait GlobalDbAdapter: AtomicDb + Send + Sync + Clone {
 
     fn get_template(&self, tx: &mut Self::DbTransaction<'_>, key: &[u8]) -> Result<Option<DbTemplate>, Self::Error>;
     fn get_templates(&self, tx: &mut Self::DbTransaction<'_>, limit: usize) -> Result<Vec<DbTemplate>, Self::Error>;
+    fn get_pending_templates(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        limit: usize,
+    ) -> Result<Vec<DbTemplate>, Self::Error>;
 
     fn insert_template(&self, tx: &mut Self::DbTransaction<'_>, template: DbTemplate) -> Result<(), Self::Error>;
     fn update_template(
@@ -57,25 +70,63 @@ pub trait GlobalDbAdapter: AtomicDb + Send + Sync + Clone {
         template: DbTemplateUpdate,
     ) -> Result<(), Self::Error>;
 
-    fn insert_validator_nodes(
+    fn insert_validator_node(
         &self,
         tx: &mut Self::DbTransaction<'_>,
-        validator_nodes: Vec<DbValidatorNode>,
+        public_key: PublicKey,
+        shard_key: ShardId,
+        epoch: Epoch,
     ) -> Result<(), Self::Error>;
     fn get_validator_nodes_within_epochs(
         &self,
         tx: &mut Self::DbTransaction<'_>,
-        start_epoch: u64,
-        end_epoch: u64,
-    ) -> Result<Vec<DbValidatorNode>, Self::Error>;
-
+        start_epoch: Epoch,
+        end_epoch: Epoch,
+    ) -> Result<Vec<ValidatorNode<PublicKey>>, Self::Error>;
     fn get_validator_node(
         &self,
         tx: &mut Self::DbTransaction<'_>,
-        start_epoch: u64,
-        end_epoch: u64,
+        start_epoch: Epoch,
+        end_epoch: Epoch,
         public_key: &[u8],
-    ) -> Result<DbValidatorNode, Self::Error>;
+    ) -> Result<ValidatorNode<PublicKey>, Self::Error>;
+    fn validator_nodes_count(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        start_epoch: Epoch,
+        end_epoch: Epoch,
+    ) -> Result<u64, Self::Error>;
+    fn validator_nodes_count_for_bucket(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        start_epoch: Epoch,
+        end_epoch: Epoch,
+        bucket: u32,
+    ) -> Result<u64, Self::Error>;
+
+    fn validator_nodes_set_committee_bucket(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        shard_key: ShardId,
+        bucket: u32,
+    ) -> Result<(), Self::Error>;
+
+    fn validator_nodes_get_by_shard_range(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        start_epoch: Epoch,
+        end_epoch: Epoch,
+        shard_range: RangeInclusive<ShardId>,
+    ) -> Result<Vec<ValidatorNode<PublicKey>>, Self::Error>;
+
+    fn validator_nodes_get_by_buckets(
+        &self,
+        tx: &mut Self::DbTransaction<'_>,
+        start_epoch: Epoch,
+        end_epoch: Epoch,
+        buckets: HashSet<u32>,
+    ) -> Result<HashMap<u32, Committee<PublicKey>>, Self::Error>;
+
     fn insert_epoch(&self, tx: &mut Self::DbTransaction<'_>, epoch: DbEpoch) -> Result<(), Self::Error>;
     fn get_epoch(&self, tx: &mut Self::DbTransaction<'_>, epoch: u64) -> Result<Option<DbEpoch>, Self::Error>;
 }

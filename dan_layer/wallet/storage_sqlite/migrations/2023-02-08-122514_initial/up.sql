@@ -34,7 +34,7 @@ CREATE TABLE transactions
     hash                TEXT     NOT NULL,
     instructions        TEXT     NOT NULL,
     signature           TEXT     NOT NULL,
-    sender_address      TEXT     NOT NULL,
+    sender_public_key   TEXT     NOT NULL,
     fee_instructions    TEXT     NOT NULL,
     meta                TEXT     NOT NULL,
     result              TEXT     NULL,
@@ -73,7 +73,6 @@ CREATE TABLE accounts
     name            TEXT     NOT NULL,
     address         TEXT     NOT NULL,
     owner_key_index BIGINT   NOT NULL,
-    balance         BIGINT   NOT NULL DEFAULT 0,
     created_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP
 );

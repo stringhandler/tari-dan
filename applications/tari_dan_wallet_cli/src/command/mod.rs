@@ -22,6 +22,7 @@
 
 use clap::Subcommand;
 
+use self::{auth::AuthSubcommand, nfts::AccountNftSubcommand, webrtc::WebRtcSubcommand};
 use crate::command::{
     account::AccountsSubcommand,
     key::KeysSubcommand,
@@ -30,9 +31,12 @@ use crate::command::{
 };
 
 mod account;
+mod auth;
 mod key;
+mod nfts;
 mod proof;
 pub mod transaction;
+mod webrtc;
 
 #[allow(clippy::large_enum_variant)]
 #[derive(Debug, Subcommand, Clone)]
@@ -45,4 +49,10 @@ pub enum Command {
     Accounts(AccountsSubcommand),
     #[clap(subcommand, alias = "proof")]
     Proofs(ProofsSubcommand),
+    #[clap(subcommand, alias = "webrtc")]
+    WebRtc(WebRtcSubcommand),
+    #[clap(subcommand, alias = "auth")]
+    Auth(AuthSubcommand),
+    #[clap(subcommand, alias = "nfts")]
+    AccountNft(AccountNftSubcommand),
 }

@@ -30,7 +30,6 @@ use tari_bor::{decode, decode_exact, encode, BorError};
 use tari_template_lib::{
     models::{
         ComponentAddress,
-        ComponentHeader,
         NonFungibleAddress,
         NonFungibleId,
         NonFungibleIndexAddress,
@@ -42,11 +41,14 @@ use tari_template_lib::{
 };
 
 use crate::{
+    commit_result::{TransactionReceipt, TransactionReceiptAddress},
+    component::ComponentHeader,
     confidential::UnclaimedConfidentialOutput,
     hashing::{hasher, EngineHashDomainLabel},
     non_fungible::NonFungibleContainer,
     non_fungible_index::NonFungibleIndex,
     resource::Resource,
+    serde_with,
     vault::Vault,
 };
 
@@ -88,12 +90,13 @@ impl Substate {
 /// Base object address, version tuples
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum SubstateAddress {
-    Component(ComponentAddress),
-    Resource(ResourceAddress),
-    Vault(VaultId),
+    Component(#[serde(with = "serde_with::string")] ComponentAddress),
+    Resource(#[serde(with = "serde_with::string")] ResourceAddress),
+    Vault(#[serde(with = "serde_with::string")] VaultId),
     UnclaimedConfidentialOutput(UnclaimedConfidentialOutputAddress),
     NonFungible(NonFungibleAddress),
     NonFungibleIndex(NonFungibleIndexAddress),
+    TransactionReceipt(TransactionReceiptAddress),
 }
 
 impl SubstateAddress {
@@ -139,6 +142,7 @@ impl SubstateAddress {
                 .chain(address.resource_address().hash())
                 .chain(&address.index())
                 .result(),
+            SubstateAddress::TransactionReceipt(address) => *address.hash(),
         }
     }
 
@@ -239,6 +243,7 @@ impl Display for SubstateAddress {
             SubstateAddress::NonFungible(addr) => write!(f, "{}", addr),
             SubstateAddress::NonFungibleIndex(addr) => write!(f, "{}", addr),
             SubstateAddress::UnclaimedConfidentialOutput(commitment_address) => write!(f, "{}", commitment_address),
+            SubstateAddress::TransactionReceipt(addr) => write!(f, "{}", addr),
         }
     }
 }
@@ -252,8 +257,8 @@ impl FromStr for SubstateAddress {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.split_once('_') {
-            Some(("component", addr)) => {
-                let addr = ComponentAddress::from_hex(addr).map_err(|_| InvalidSubstateAddressFormat(s.to_string()))?;
+            Some(("component", _)) => {
+                let addr = ComponentAddress::from_str(s).map_err(|_| InvalidSubstateAddressFormat(s.to_string()))?;
                 Ok(SubstateAddress::Component(addr))
             },
             Some(("resource", addr)) => {
@@ -297,6 +302,11 @@ impl FromStr for SubstateAddress {
                     .map_err(|_| InvalidSubstateAddressFormat(s.to_string()))?;
                 Ok(SubstateAddress::UnclaimedConfidentialOutput(commitment_address))
             },
+            Some(("txreceipt", addr)) => {
+                let tx_receipt_addr = TransactionReceiptAddress::from_hex(addr)
+                    .map_err(|_| InvalidSubstateAddressFormat(addr.to_string()))?;
+                Ok(SubstateAddress::TransactionReceipt(tx_receipt_addr))
+            },
             Some(_) | None => Err(InvalidSubstateAddressFormat(s.to_string())),
         }
     }
@@ -324,6 +334,7 @@ impl_partial_eq!(ResourceAddress, Resource);
 impl_partial_eq!(VaultId, Vault);
 impl_partial_eq!(UnclaimedConfidentialOutputAddress, UnclaimedConfidentialOutput);
 impl_partial_eq!(NonFungibleAddress, NonFungible);
+impl_partial_eq!(TransactionReceiptAddress, TransactionReceipt);
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub enum SubstateValue {
@@ -333,6 +344,7 @@ pub enum SubstateValue {
     NonFungible(NonFungibleContainer),
     NonFungibleIndex(NonFungibleIndex),
     UnclaimedConfidentialOutput(UnclaimedConfidentialOutput),
+    TransactionReceipt(TransactionReceipt),
 }
 
 impl SubstateValue {
@@ -358,6 +370,13 @@ impl SubstateValue {
     }
 
     pub fn into_vault(self) -> Option<Vault> {
+        match self {
+            SubstateValue::Vault(vault) => Some(vault),
+            _ => None,
+        }
+    }
+
+    pub fn vault(&self) -> Option<&Vault> {
         match self {
             SubstateValue::Vault(vault) => Some(vault),
             _ => None,
@@ -404,6 +423,35 @@ impl SubstateValue {
             SubstateValue::UnclaimedConfidentialOutput(output) => Some(output),
             _ => None,
         }
+    }
+
+    pub fn into_transaction_receipt(self) -> Option<TransactionReceipt> {
+        match self {
+            SubstateValue::TransactionReceipt(tx_receipt) => Some(tx_receipt),
+            _ => None,
+        }
+    }
+
+    pub fn as_transaction_receipt(&self) -> Option<&TransactionReceipt> {
+        match self {
+            SubstateValue::TransactionReceipt(tx_receipt) => Some(tx_receipt),
+            _ => None,
+        }
+    }
+
+    pub fn as_transaction_receipt_mut(&mut self) -> Option<&mut TransactionReceipt> {
+        match self {
+            SubstateValue::TransactionReceipt(tx_receipt) => Some(tx_receipt),
+            _ => None,
+        }
+    }
+
+    pub fn to_bytes(&self) -> Vec<u8> {
+        encode(self).unwrap()
+    }
+
+    pub fn from_bytes(bytes: &[u8]) -> Result<Self, BorError> {
+        decode_exact(bytes)
     }
 }
 
@@ -471,8 +519,16 @@ impl SubstateDiff {
         self.down_substates.iter()
     }
 
+    pub fn up_len(&self) -> usize {
+        self.up_substates.len()
+    }
+
+    pub fn down_len(&self) -> usize {
+        self.down_substates.len()
+    }
+
     pub fn len(&self) -> usize {
-        self.up_substates.len() + self.down_substates.len()
+        self.up_len() + self.down_len()
     }
 
     pub fn is_empty(&self) -> bool {

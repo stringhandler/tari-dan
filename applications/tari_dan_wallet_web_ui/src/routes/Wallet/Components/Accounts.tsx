@@ -20,7 +20,7 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import { useEffect, useState } from "react";
+import { ReactNode, useEffect, useState } from "react";
 import { accountsClaimBurn, accountsCreate, accountsList } from "../../../utils/json_rpc";
 import Error from "./Error";
 import Table from "@mui/material/Table";
@@ -34,23 +34,27 @@ import { BoxHeading2 } from "../../../Components/StyledComponents";
 import Fade from "@mui/material/Fade";
 import { Form } from "react-router-dom";
 import TextField from "@mui/material/TextField/TextField";
+import Select, { SelectChangeEvent } from "@mui/material/Select/Select";
 import Button from "@mui/material/Button/Button";
 import AddIcon from "@mui/icons-material/Add";
+import { removeTagged } from "../../../utils/helpers";
+import MenuItem from "@mui/material/MenuItem";
+import Alert from "@mui/material/Alert";
+import Link from "@mui/material/Link";
 
 function Account(account: any) {
   return (
-    <TableRow key={account[0].address.Component}>
-      <TableCell>{account[0].name}</TableCell>
-      <TableCell>{toHexString(account[0].address.Component)}</TableCell>
-      <TableCell>{account[0].balance}</TableCell>
-      <TableCell>{account[0].key_index}</TableCell>
-      <TableCell>{account[1]}</TableCell>
+    <TableRow key={toHexString(account.account.address.Component)}>
+      <TableCell><Link href={"accounts/" + account.account.name}>{account.account.name}</Link></TableCell>
+      <TableCell>{account.account.address.Component}</TableCell>
+      <TableCell>{account.account.key_index}</TableCell>
+      <TableCell>{account.public_key}</TableCell>
     </TableRow>
   );
 }
 
 function Accounts() {
-  const [state, setState] = useState();
+  const [state, setState] = useState<any>();
   const [error, setError] = useState<String>();
   const [showAccountDialog, setShowAddAccountDialog] = useState(false);
   const [showClaimDialog, setShowClaimBurnDialog] = useState(false);
@@ -72,8 +76,8 @@ function Accounts() {
         setState(response);
         setError(undefined);
       })
-      .catch((reason) => {
-        setError(reason);
+      .catch((err) => {
+        setError(err && err.message ? err.message : `Unknown error: ${JSON.stringify(err)}`);
       });
   };
 
@@ -82,7 +86,8 @@ function Accounts() {
       accountFormState.accountName,
       accountFormState.signingKeyIndex ? +accountFormState.signingKeyIndex : undefined,
       undefined,
-      accountFormState.fee ? +accountFormState.fee : undefined
+      accountFormState.fee ? +accountFormState.fee : undefined,
+      false
     ).then((response) => {
       loadAccounts();
     });
@@ -94,13 +99,14 @@ function Accounts() {
   };
 
   const onClaimBurn = () => {
-    accountsClaimBurn(fromHexString(claimBurnFormState.account), claimBurnFormState.claimProof, +claimBurnFormState.fee)
+    accountsClaimBurn(claimBurnFormState.account, JSON.parse(claimBurnFormState.claimProof), +claimBurnFormState.fee)
       .then((response) => {
         console.log(response);
         loadAccounts();
       })
-      .catch((reason) => {
-        console.log(reason);
+      .catch((err) => {
+        console.log(err);
+        setError(err && err.message ? err.message : `Unknown error: ${JSON.stringify(err)}`);
       });
     setClaimBurnFormState({ account: "", claimProof: "", fee: "" });
     setShowClaimBurnDialog(false);
@@ -110,14 +116,19 @@ function Accounts() {
     setClaimBurnFormState({ ...claimBurnFormState, [e.target.name]: e.target.value });
   };
 
+  const onClaimBurnAccountChange = (e: SelectChangeEvent<string>) => {
+    setClaimBurnFormState({ ...claimBurnFormState, [e.target.name]: e.target.value });
+  };
+
   useEffect(() => {
     loadAccounts();
   }, []);
-  if (error) {
-    return <Error component="Accounts" message={error} />;
-  }
+
   return (
     <>
+      {error ? (
+        <Alert severity="error">{error}</Alert>
+      ) : null}
       <BoxHeading2>
         {showAccountDialog && (
           <Fade in={showAccountDialog}>
@@ -164,13 +175,16 @@ function Accounts() {
         {showClaimDialog && (
           <Fade in={showClaimDialog}>
             <Form onSubmit={onClaimBurn} className="flex-container">
-              <TextField
-                name="account"
+              <Select name="account"
                 label="Account"
                 value={claimBurnFormState.account}
-                onChange={onClaimBurnChange}
-                style={{ flexGrow: 1 }}
-              />
+                onChange={onClaimBurnAccountChange}
+                style={{ flexGrow: 1 }}  >
+                {state?.accounts.map((account: any) => (
+                  <MenuItem key={toHexString(account.account.address.Component)} value={"component_" + toHexString(account.account.address.Component)}>{account.account.name} </MenuItem>
+
+                ))}
+              </Select>
               <TextField
                 name="claimProof"
                 label="Claim Proof"
@@ -210,7 +224,6 @@ function Accounts() {
             <TableRow>
               <TableCell>Name</TableCell>
               <TableCell>Address</TableCell>
-              <TableCell>Balance</TableCell>
               <TableCell>Key index</TableCell>
               <TableCell>Public key</TableCell>
             </TableRow>

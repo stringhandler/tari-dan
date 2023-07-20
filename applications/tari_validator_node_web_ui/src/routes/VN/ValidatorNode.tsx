@@ -20,18 +20,12 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import { useEffect, useState } from 'react';
+import { useContext } from 'react';
 import AllVNs from './Components/AllVNs';
-import Committees from './Components/Committees';
+import Committees from '../Committees/Committees';
 import Connections from './Components/Connections';
+import Fees from './Components/Fees';
 import Info from './Components/Info';
-import { IEpoch, IIdentity } from '../../utils/interfaces';
-import {
-  getEpochManagerStats,
-  getIdentity,
-  getRecentTransactions,
-  getShardKey,
-} from '../../utils/json_rpc';
 import Mempool from './Components/Mempool';
 import RecentTransactions from './Components/RecentTransactions';
 import Templates from './Components/Templates';
@@ -39,72 +33,29 @@ import './ValidatorNode.css';
 import { StyledPaper } from '../../Components/StyledComponents';
 import Grid from '@mui/material/Grid';
 import SecondaryHeading from '../../Components/SecondaryHeading';
+import { VNContext } from '../../App';
 
 function ValidatorNode() {
-  const [epoch, setEpoch] = useState<IEpoch | undefined>(undefined);
-  const [identity, setIdentity] = useState<IIdentity | undefined>(undefined);
-  const [shardKey, setShardKey] = useState<string | null>(null);
-  const [error, setError] = useState('');
-  // Refresh every 2 minutes
-  const refreshEpoch = (epoch: IEpoch | undefined) => {
-    getEpochManagerStats()
-      .then((response) => {
-        if (response.current_epoch !== epoch?.current_epoch) {
-          setEpoch(response);
-        }
-      })
-      .catch((reason) => {
-        console.error(reason);
-        setError('Json RPC error, please check console');
-      });
-  };
-  useEffect(() => {
-    const id = window.setInterval(() => {
-      refreshEpoch(epoch);
-    }, 2 * 60 * 1000);
-    return () => {
-      window.clearInterval(id);
-    };
-  }, [epoch]);
-  // Initial fetch
-  useEffect(() => {
-    refreshEpoch(undefined);
-    getIdentity()
-      .then((response) => {
-        setIdentity(response);
-      })
-      .catch((reason) => {
-        console.log(reason);
-        setError('Json RPC error, please check console');
-      });
-  }, []);
-  // Get shard key.
-  useEffect(() => {
-    if (epoch !== undefined && identity !== undefined) {
-      // The *10 is from the hardcoded constant in VN.
-      getShardKey(epoch.current_epoch * 10, identity.public_key).then(
-        (response) => {
-          setShardKey(response.shard_key);
-        }
-      );
-    }
-  }, [epoch, identity]);
-  useEffect(() => {
-    getRecentTransactions();
-  }, []);
+  const { epoch, identity, shardKey, error } = useContext(VNContext);
+
   if (error !== '') {
     return <div className="error">{error}</div>;
   }
   if (epoch === undefined || identity === undefined) return <div>Loading</div>;
+
   return (
-    <Grid container spacing={5}>
-      <SecondaryHeading>Info</SecondaryHeading>
+    <>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Info</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <Info epoch={epoch} identity={identity} shardKey={shardKey} />
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>Committees</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Committees</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           {shardKey ? (
@@ -116,37 +67,55 @@ function ValidatorNode() {
           ) : null}
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>Connections</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Connections</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <Connections />
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>Mempool</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Fees</SecondaryHeading>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <StyledPaper>
+          <Fees />
+        </StyledPaper>
+      </Grid>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Mempool</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <Mempool />
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>Recent Transactions</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Recent Transactions</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <RecentTransactions />
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>Templates</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>Templates</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <Templates />
         </StyledPaper>
       </Grid>
-      <SecondaryHeading>VNs</SecondaryHeading>
+      <Grid item xs={12} md={12} lg={12}>
+        <SecondaryHeading>VNs</SecondaryHeading>
+      </Grid>
       <Grid item xs={12} md={12} lg={12}>
         <StyledPaper>
           <AllVNs epoch={epoch.current_epoch} />
         </StyledPaper>
       </Grid>
-    </Grid>
+    </>
   );
 }
 

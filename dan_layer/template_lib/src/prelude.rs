@@ -20,18 +20,22 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-pub use tari_bor::{encode, serde};
+pub use tari_bor;
 #[cfg(feature = "macro")]
 pub use tari_template_macros::template;
 
 pub use crate::{
     auth::{AccessRule, AccessRules, RestrictedAccessRule::*},
+    caller_context::CallerContext,
     component::{
         interface::{ComponentInstanceInterface, ComponentInterface},
         ComponentManager,
     },
     consensus::Consensus,
     constants::{CONFIDENTIAL_TARI_RESOURCE_ADDRESS, PUBLIC_IDENTITY_RESOURCE_ADDRESS},
+    crypto::RistrettoPublicKeyBytes,
+    events::emit_event,
+    invoke_args,
     models::{
         Amount,
         Bucket,
@@ -44,7 +48,10 @@ pub use crate::{
         NonFungibleAddress,
         NonFungibleId,
         ResourceAddress,
+        TemplateAddress,
         Vault,
     },
+    rand,
     resource::{ResourceBuilder, ResourceManager, ResourceType},
+    template::TemplateManager,
 };

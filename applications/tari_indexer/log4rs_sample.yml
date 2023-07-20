@@ -24,7 +24,7 @@ appenders:
   # An appender named "network" that writes to a file with a custom pattern encoder
   network:
     kind: rolling_file
-    path: "log/indexer/network.log"
+    path: "{{log_dir}}/log/indexer/network.log"
     policy:
       kind: compound
       trigger:
@@ -34,14 +34,14 @@ appenders:
         kind: fixed_window
         base: 1
         count: 5
-        pattern: "log/indexer/network.{}.log"
+        pattern: "{{log_dir}}/log/indexer/network.{}.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%f)} [{t}] [Thread:{I}] {l:5} {m}// {f}:{L}{n}"
 
   # An appender named "dan_layer" that writes to a file with a custom pattern encoder
   dan_layer:
     kind: rolling_file
-    path: "log/indexer/dan_layer.log"
+    path: "{{log_dir}}/log/indexer/dan_layer.log"
     policy:
       kind: compound
       trigger:
@@ -51,14 +51,14 @@ appenders:
         kind: fixed_window
         base: 1
         count: 5
-        pattern: "log/indexer/dan_layer.{}.log"
+        pattern: "{{log_dir}}/log/indexer/dan_layer.{}.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%f)} [{t}] [{X(node-public-key)},{X(node-id)}] {l:5} {m} // {f}:{L}{n}"
 
   # An appender named "dan_layer" that writes to a file with a custom pattern encoder
-  engine:
+  json_rpc:
     kind: rolling_file
-    path: "log/indexer/engine.log"
+    path: "{{log_dir}}/log/indexer/json_rpc.log"
     policy:
       kind: compound
       trigger:
@@ -68,14 +68,14 @@ appenders:
         kind: fixed_window
         base: 1
         count: 5
-        pattern: "log/indexer/engine.{}.log"
+        pattern: "{{log_dir}}/log/indexer/json_rpc.{}.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%f)} [{t}] [{X(node-public-key)},{X(node-id)}] {l:5} {m} // {f}:{L}{n}"
 
   # An appender named "other" that writes to a file with a custom pattern encoder
   other:
     kind: rolling_file
-    path: "log/indexer/other.log"
+    path: "{{log_dir}}/log/indexer/other.log"
     policy:
       kind: compound
       trigger:
@@ -85,7 +85,7 @@ appenders:
         kind: fixed_window
         base: 1
         count: 5
-        pattern: "log/indexer/other.{}.log"
+        pattern: "{{log_dir}}/log/indexer/other.{}.log"
     encoder:
       pattern: "{d(%Y-%m-%d %H:%M:%S.%f)} [{t}] [Thread:{I}] {l:5} {m} // {f}:{L} {n}"
 
@@ -106,14 +106,14 @@ loggers:
       - stdout
     additive: false
 
-  tari::validator_node:
-    level: debug
+  tari::dan:
+    level: info
     appenders:
       - dan_layer
       - stdout
     additive: false
 
-  tari::dan:
+  tari::indexer:
     level: info
     appenders:
       - dan_layer
@@ -132,27 +132,12 @@ loggers:
     appenders:
       - network
 
+  tari::indexer::json_rpc:
+    level: debug
+    appenders:
+      - json_rpc
+    additive: true
 
-  # spits out the whole wasm if in debug mode
-  regalloc:
-    level: info
-    appenders:
-      - other
-      - stdout
-    additive: false
-
-  # spits out the whole wasm if in debug mode
-  cranelift_codegen:
-    level: info
-    appenders:
-      - other
-      - stdout
-    additive: false
-  wasmer_compiler_cranelift:
-    level: warn
-    appenders:
-      - other
-    additive: false
   hyper:
     level: info
     appenders:

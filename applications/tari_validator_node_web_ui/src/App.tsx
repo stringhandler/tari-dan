@@ -20,188 +20,175 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import { useState } from 'react';
-import { styled } from '@mui/material/styles';
-import CssBaseline from '@mui/material/CssBaseline';
-import MuiDrawer from '@mui/material/Drawer';
-import Box from '@mui/material/Box';
-import MuiAppBar, { AppBarProps as MuiAppBarProps } from '@mui/material/AppBar';
-import Toolbar from '@mui/material/Toolbar';
-import List from '@mui/material/List';
-import IconButton from '@mui/material/IconButton';
-import MenuOpenOutlinedIcon from '@mui/icons-material/MenuOpenOutlined';
-import MenuOutlinedIcon from '@mui/icons-material/MenuOutlined';
-import { mainListItems } from './Components/MenuItems';
-import { ThemeProvider } from '@mui/material';
-import theme from './theme';
-import { Routes, Route, Outlet, Link } from 'react-router-dom';
+import { Routes, Route } from 'react-router-dom';
 import Mempool from './routes/Mempool/Mempool';
-import Committees from './routes/Committees/Committees';
+import Committees from './routes/Committees/CommitteesLayout';
 import ValidatorNode from './routes/VN/ValidatorNode';
 import Connections from './routes/Connections/Connections';
+import Fees from './routes/Fees/Fees';
 import RecentTransactions from './routes/RecentTransactions/RecentTransactions';
 import Templates from './routes/Templates/Templates';
 import ValidatorNodes from './routes/ValidatorNodes/ValidatorNodes';
 import ErrorPage from './routes/ErrorPage';
 import Transaction from './routes/Transaction/Transaction';
-import Logo from './Components/Logo';
-import Container from '@mui/material/Container';
 import TemplateFunctions from './routes/VN/Components/TemplateFunctions';
+import Layout from './theme/LayoutMain';
+import CommitteeMembers from './routes/Committees/CommitteeMembers';
+import { createContext, useState, useEffect } from 'react';
+import { IEpoch, IIdentity } from './utils/interfaces';
+import {
+  getEpochManagerStats,
+  getIdentity,
+  getRecentTransactions,
+  getShardKey,
+} from './utils/json_rpc';
 
-const drawerWidth = 300;
-
-interface AppBarProps extends MuiAppBarProps {
-  open?: boolean;
+interface IContext {
+  epoch: IEpoch | undefined;
+  identity: IIdentity | undefined;
+  shardKey: string | null;
+  error: string;
 }
 
-const AppBar = styled(MuiAppBar, {
-  shouldForwardProp: (prop) => prop !== 'open',
-})<AppBarProps>(({ theme, open }) => ({
-  zIndex: theme.zIndex.drawer + 1,
-  transition: theme.transitions.create(['width', 'margin'], {
-    easing: theme.transitions.easing.easeOut,
-    duration: theme.transitions.duration.enteringScreen,
-  }),
-  ...(open && {
-    marginLeft: drawerWidth,
-    width: `calc(100% - ${drawerWidth}px)`,
-    transition: theme.transitions.create(['width', 'margin'], {
-      easing: theme.transitions.easing.easeOut,
-      duration: theme.transitions.duration.enteringScreen,
-    }),
-  }),
-}));
+export const VNContext = createContext<IContext>({
+  epoch: undefined,
+  identity: undefined,
+  shardKey: null,
+  error: '',
+});
 
-const Drawer = styled(MuiDrawer, {
-  shouldForwardProp: (prop) => prop !== 'open',
-})(({ theme, open }) => ({
-  '& .MuiDrawer-paper': {
-    position: 'relative',
-    whiteSpace: 'nowrap',
-    borderRight: '1px solid #F5F5F5',
-    boxShadow: '10px 14px 28px rgb(35 11 73 / 5%)',
-    width: drawerWidth,
-    transition: theme.transitions.create('width', {
-      easing: theme.transitions.easing.easeOut,
-      duration: theme.transitions.duration.enteringScreen,
-    }),
-    boxSizing: 'border-box',
-    ...(!open && {
-      overflowX: 'hidden',
-      transition: theme.transitions.create('width', {
-        easing: theme.transitions.easing.easeOut,
-        duration: theme.transitions.duration.leavingScreen,
-      }),
-      width: theme.spacing(7),
-      [theme.breakpoints.up('sm')]: {
-        width: theme.spacing(9),
-      },
-    }),
+export const breadcrumbRoutes = [
+  {
+    label: 'Home',
+    path: '/',
+    dynamic: false,
   },
-}));
-
-function Layout() {
-  const [open, setOpen] = useState(false);
-  const toggleDrawer = () => {
-    setOpen(!open);
-  };
-  return (
-    <ThemeProvider theme={theme}>
-      <Box sx={{ display: 'flex' }}>
-        <CssBaseline />
-        <AppBar
-          position="absolute"
-          open={open}
-          color="secondary"
-          elevation={0}
-          sx={{
-            backgroundColor: '#FFF',
-            boxShadow: '10px 14px 28px rgb(35 11 73 / 5%)',
-          }}
-        >
-          <Toolbar
-            sx={{
-              pr: '24px', // keep right padding when drawer closed
-            }}
-          >
-            <IconButton
-              edge="start"
-              color="inherit"
-              aria-label="open drawer"
-              onClick={toggleDrawer}
-              sx={{
-                marginRight: '36px',
-                color: '#757575',
-                ...(open && { display: 'none' }),
-              }}
-            >
-              <MenuOutlinedIcon />
-            </IconButton>
-            <Link to="/">
-              <Logo />
-            </Link>
-          </Toolbar>
-        </AppBar>
-        <Drawer variant="permanent" open={open}>
-          <Toolbar
-            sx={{
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'flex-end',
-              px: [1],
-            }}
-          >
-            <IconButton onClick={toggleDrawer}>
-              <MenuOpenOutlinedIcon />
-            </IconButton>
-          </Toolbar>
-          <List component="nav">{mainListItems}</List>
-        </Drawer>
-        <Box
-          component="main"
-          sx={{
-            backgroundColor: (theme) =>
-              theme.palette.mode === 'light'
-                ? theme.palette.grey[100]
-                : theme.palette.grey[900],
-            flexGrow: 1,
-            height: '100vh',
-            overflow: 'auto',
-          }}
-        >
-          <Toolbar />
-          <Container
-            maxWidth="xl"
-            style={{
-              paddingTop: theme.spacing(5),
-              paddingBottom: theme.spacing(5),
-            }}
-          >
-            <Outlet />
-          </Container>
-        </Box>
-      </Box>
-    </ThemeProvider>
-  );
-}
+  {
+    label: 'Committees',
+    path: '/committees',
+    dynamic: false,
+  },
+  {
+    label: 'Connections',
+    path: '/connections',
+    dynamic: false,
+  },
+  {
+    label: 'Fees',
+    path: '/fees',
+    dynamic: false,
+  },
+  {
+    label: 'Transactions',
+    path: '/transactions',
+    dynamic: false,
+  },
+  {
+    label: 'Templates',
+    path: '/templates',
+    dynamic: false,
+  },
+  {
+    label: 'Validator Nodes',
+    path: '/vns',
+    dynamic: false,
+  },
+  {
+    label: 'Mempool',
+    path: '/mempool',
+    dynamic: false,
+  },
+  {
+    label: 'Transaction',
+    path: '/transactions/:payloadId',
+    dynamic: true,
+  },
+  {
+    label: 'Template',
+    path: '/templates/:address',
+    dynamic: true,
+  },
+  {
+    label: 'Committee',
+    path: '/committees/:address',
+    dynamic: true,
+  },
+];
 
 export default function App() {
+  const [epoch, setEpoch] = useState<IEpoch | undefined>(undefined);
+  const [identity, setIdentity] = useState<IIdentity | undefined>(undefined);
+  const [shardKey, setShardKey] = useState<string | null>(null);
+  const [error, setError] = useState('');
+
+  // Refresh every 2 minutes
+  const refreshEpoch = (epoch: IEpoch | undefined) => {
+    getEpochManagerStats()
+      .then((response) => {
+        if (response.current_epoch !== epoch?.current_epoch) {
+          setEpoch(response);
+        }
+      })
+      .catch((reason) => {
+        console.error(reason);
+        setError('Json RPC error, please check console');
+      });
+  };
+  useEffect(() => {
+    const id = window.setInterval(() => {
+      refreshEpoch(epoch);
+    }, 2 * 60 * 1000);
+    return () => {
+      window.clearInterval(id);
+    };
+  }, [epoch]);
+  // Initial fetch
+  useEffect(() => {
+    refreshEpoch(undefined);
+    getIdentity()
+      .then((response) => {
+        setIdentity(response);
+      })
+      .catch((reason) => {
+        console.log(reason);
+        setError('Json RPC error, please check console');
+      });
+  }, []);
+  // Get shard key.
+  useEffect(() => {
+    if (epoch !== undefined && identity !== undefined) {
+      // The *10 is from the hardcoded constant in VN.
+      getShardKey(epoch.current_epoch * 10, identity.public_key).then(
+        (response) => {
+          setShardKey(response.shard_key);
+        }
+      );
+    }
+  }, [epoch, identity]);
+  useEffect(() => {
+    getRecentTransactions();
+  }, []);
+
   return (
     <div>
-      <Routes>
-        <Route path="/" element={<Layout />}>
-          <Route index element={<ValidatorNode />} />
-          <Route path="committees" element={<Committees />} />
-          <Route path="connections" element={<Connections />} />
-          <Route path="transactions" element={<RecentTransactions />} />
-          <Route path="templates" element={<Templates />} />
-          <Route path="vns" element={<ValidatorNodes />} />
-          <Route path="mempool" element={<Mempool />} />
-          <Route path="transaction/:payloadId" element={<Transaction />} />
-          <Route path="template/:address" element={<TemplateFunctions />} />
-          <Route path="*" element={<ErrorPage />} />
-        </Route>
-      </Routes>
+      <VNContext.Provider value={{ epoch, identity, shardKey, error }}>
+        <Routes>
+          <Route path="/" element={<Layout />}>
+            <Route index element={<ValidatorNode />} />
+            <Route path="committees" element={<Committees />} />
+            <Route path="connections" element={<Connections />} />
+            <Route path="fees" element={<Fees />} />
+            <Route path="transactions" element={<RecentTransactions />} />
+            <Route path="templates" element={<Templates />} />
+            <Route path="vns" element={<ValidatorNodes />} />
+            <Route path="mempool" element={<Mempool />} />
+            <Route path="transactions/:payloadId" element={<Transaction />} />
+            <Route path="templates/:address" element={<TemplateFunctions />} />
+            <Route path="committees/:address" element={<CommitteeMembers />} />
+            <Route path="*" element={<ErrorPage />} />
+          </Route>
+        </Routes>
+      </VNContext.Provider>
     </div>
   );
 }

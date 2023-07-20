@@ -22,22 +22,23 @@
 
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import './index.css';
+import './theme/theme.css';
 import reportWebVitals from './reportWebVitals';
 import { createBrowserRouter, RouterProvider } from 'react-router-dom';
-import ValidatorNode from './routes/VN/ValidatorNode';
 import Transaction, {
   transactionLoader,
 } from './routes/Transaction/Transaction';
 import App from './App';
-import Committees from './routes/Committees/Committees';
+import Committees from './routes/Committees/CommitteesLayout';
 import Connections from './routes/Connections/Connections';
+import Fees from './routes/Fees/Fees';
 import Mempool from './routes/Mempool/Mempool';
 import RecentTransactions from './routes/RecentTransactions/RecentTransactions';
 import Templates from './routes/Templates/Templates';
 import ValidatorNodes from './routes/ValidatorNodes/ValidatorNodes';
 import ErrorPage from './routes/ErrorPage';
 import TemplateFunctions from './routes/VN/Components/TemplateFunctions';
+import CommitteeMembers from './routes/Committees/CommitteeMembers';
 
 const router = createBrowserRouter([
   {
@@ -48,6 +49,10 @@ const router = createBrowserRouter([
       {
         path: 'connections',
         element: <Connections />,
+      },
+      {
+        path: 'fees',
+        element: <Fees />,
       },
       {
         path: 'transactions',
@@ -74,13 +79,17 @@ const router = createBrowserRouter([
         element: <Committees />,
       },
       {
-        path: 'transaction/:payloadId',
+        path: 'transactions/:payloadId',
         element: <Transaction />,
         loader: transactionLoader,
       },
       {
-        path: 'template/:address',
+        path: 'templates/:address',
         element: <TemplateFunctions />,
+      },
+      {
+        path: 'committees/:address',
+        element: <CommitteeMembers />,
       },
     ],
   },

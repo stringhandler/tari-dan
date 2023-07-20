@@ -23,7 +23,7 @@
 pub mod auth;
 
 mod hash;
-pub use hash::Hash;
+pub use hash::{Hash, HashParseError};
 
 #[macro_use]
 pub mod args;
@@ -32,12 +32,17 @@ pub mod models;
 pub mod component;
 pub mod consensus;
 
+pub mod caller_context;
 mod context;
 pub use context::{get_context, init_context, AbiContext};
 
+pub mod rand;
 pub mod resource;
 
 pub mod crypto;
+pub mod events;
+
+pub mod template;
 
 // ---------------------------------------- WASM target exports ------------------------------------------------
 

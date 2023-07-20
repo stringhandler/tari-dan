@@ -20,36 +20,66 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::collections::HashMap;
-
-use ciborium::tag::Required;
 use serde::{Deserialize, Serialize};
+use tari_bor::BorTag;
+use tari_template_abi::rust::{collections::BTreeMap, fmt::Display};
 
 use super::BinaryTag;
 const TAG: u64 = BinaryTag::Metadata as u64;
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-pub struct Metadata(Required<HashMap<String, String>, TAG>);
+pub struct Metadata(BorTag<BTreeMap<String, String>, TAG>);
 
 impl Metadata {
-    pub fn new() -> Self {
-        Self(Required::<HashMap<String, String>, TAG>(HashMap::new()))
+    pub const fn new() -> Self {
+        Self(BorTag::new(BTreeMap::new()))
     }
 
     pub fn insert<K: Into<String>, V: Into<String>>(&mut self, key: K, value: V) -> &mut Self {
         let key = key.into();
         let value = value.into();
-        self.0 .0.insert(key, value);
+        self.0.insert(key, value);
         self
     }
 
-    pub fn get(&self, key: &str) -> Option<&str> {
-        self.0 .0.get(key).map(|v| v.as_str())
+    pub fn get(&self, key: &str) -> Option<&String> {
+        self.0.get(key)
+    }
+}
+
+impl From<BTreeMap<String, String>> for Metadata {
+    fn from(value: BTreeMap<String, String>) -> Self {
+        Self(BorTag::new(value))
+    }
+}
+
+impl<K: Into<String>, V: Into<String>, const N: usize> From<[(K, V); N]> for Metadata {
+    fn from(value: [(K, V); N]) -> Self {
+        Self(BorTag::new(BTreeMap::from(value.map(|(k, v)| (k.into(), v.into())))))
+    }
+}
+
+impl IntoIterator for Metadata {
+    type IntoIter = std::collections::btree_map::IntoIter<String, String>;
+    type Item = (String, String);
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.0.into_inner().into_iter()
     }
 }
 
 impl Default for Metadata {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Display for Metadata {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Metadata: ")?;
+        for (key, value) in self.0.iter() {
+            write!(f, "key = {}, value = {} ", key, value)?;
+        }
+        Ok(())
     }
 }

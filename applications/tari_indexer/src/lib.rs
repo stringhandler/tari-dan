@@ -29,40 +29,45 @@ mod bootstrap;
 pub mod cli;
 mod comms;
 pub mod config;
-mod dan_layer_scanner;
+mod dry_run;
+pub mod graphql;
 mod http_ui;
 mod json_rpc;
 mod p2p;
 mod substate_manager;
 mod substate_storage_sqlite;
+mod transaction_manager;
 
 use std::{
+    fs,
     net::{IpAddr, Ipv4Addr, SocketAddr},
     sync::Arc,
 };
 
-use dan_layer_scanner::DanLayerScanner;
-pub use dan_layer_scanner::NonFungible;
 use http_ui::server::run_http_ui_server;
-pub use json_rpc::{AddAddressRequest, GetNonFungibleCountRequest, GetNonFungiblesRequest, GetSubstateRequest};
 use log::*;
 use substate_manager::SubstateManager;
 use tari_app_utilities::identity_management::setup_node_identity;
+use tari_base_node_client::grpc::GrpcBaseNodeClient;
 use tari_common::{
     configuration::bootstrap::{grpc_default_port, ApplicationType},
     exit_codes::{ExitCode, ExitError},
 };
 use tari_comms::peer_manager::PeerFeatures;
-use tari_dan_app_utilities::base_node_client::GrpcBaseNodeClient;
-use tari_dan_core::{consensus_constants::ConsensusConstants, services::BaseNodeClient, storage::DbFactory};
+use tari_dan_app_utilities::consensus_constants::ConsensusConstants;
+use tari_dan_storage::global::DbFactory;
 use tari_dan_storage_sqlite::SqliteDbFactory;
+use tari_indexer_lib::substate_scanner::SubstateScanner;
 use tari_shutdown::ShutdownSignal;
 use tokio::{task, time};
 
 use crate::{
     bootstrap::{spawn_services, Services},
     config::ApplicationConfig,
+    dry_run::processor::DryRunTransactionProcessor,
+    graphql::server::run_graphql,
     json_rpc::{run_json_rpc, JsonRpcHandlers},
+    transaction_manager::TransactionManager,
 };
 
 const LOG_TARGET: &str = "tari::indexer::app";
@@ -71,7 +76,7 @@ pub const DAN_PEER_FEATURES: PeerFeatures = PeerFeatures::COMMUNICATION_NODE;
 pub async fn run_indexer(config: ApplicationConfig, mut shutdown_signal: ShutdownSignal) -> Result<(), ExitError> {
     let node_identity = setup_node_identity(
         &config.indexer.identity_file,
-        vec![config.indexer.public_address.clone().unwrap()],
+        config.indexer.p2p.public_addresses.to_vec(),
         true,
         DAN_PEER_FEATURES,
     )?;
@@ -94,27 +99,63 @@ pub async fn run_indexer(config: ApplicationConfig, mut shutdown_signal: Shutdow
     )
     .await?;
 
-    let dan_layer_scanner = DanLayerScanner::new(
+    let dan_layer_scanner = Arc::new(SubstateScanner::new(
         services.epoch_manager.clone(),
         services.validator_node_client_factory.clone(),
-    );
+    ));
 
     let substate_manager = Arc::new(SubstateManager::new(
-        Arc::new(dan_layer_scanner),
+        dan_layer_scanner.clone(),
         services.substate_store.clone(),
     ));
+    let transaction_manager = TransactionManager::new(
+        services.epoch_manager.clone(),
+        services.validator_node_client_factory.clone(),
+        dan_layer_scanner.clone(),
+    );
+
+    // dry run
+    let dry_run_transaction_processor = DryRunTransactionProcessor::new(
+        services.epoch_manager.clone(),
+        services.validator_node_client_factory.clone(),
+        dan_layer_scanner,
+        services.template_manager.clone(),
+    );
 
     // Run the JSON-RPC API
     let jrpc_address = config.indexer.json_rpc_address;
     if let Some(address) = jrpc_address {
         info!(target: LOG_TARGET, "🌐 Started JSON-RPC server on {}", address);
-        let handlers = JsonRpcHandlers::new(&services, base_node_client, substate_manager.clone());
+        let consensus_constants = services
+            .epoch_manager
+            .get_base_layer_consensus_constants()
+            .await
+            .map_err(|e| ExitError::new(ExitCode::UnknownError, e))?;
+        let handlers = JsonRpcHandlers::new(
+            consensus_constants,
+            &services,
+            base_node_client,
+            substate_manager.clone(),
+            transaction_manager,
+            dry_run_transaction_processor,
+        );
         task::spawn(run_json_rpc(address, handlers));
+    }
+    // Run the GraphQL API
+    let graphql_address = config.indexer.graphql_address;
+    if let Some(address) = graphql_address {
+        info!(target: LOG_TARGET, "🌐 Started GraphQL server on {}", address);
+        task::spawn(run_graphql(address, substate_manager.clone()));
     }
     // Run the http ui
     if let Some(address) = config.indexer.http_ui_address {
         task::spawn(run_http_ui_server(address, jrpc_address));
     }
+
+    // Create pid to allow watchers to know that the process has started
+    fs::write(config.common.base_path.join("pid"), std::process::id().to_string())
+        .map_err(|e| ExitError::new(ExitCode::IOError, e))?;
+
     // keep scanning the dan layer for new versions of the stored substates
     loop {
         tokio::select! {
@@ -137,14 +178,10 @@ pub async fn run_indexer(config: ApplicationConfig, mut shutdown_signal: Shutdow
 }
 
 async fn create_base_layer_clients(config: &ApplicationConfig) -> Result<GrpcBaseNodeClient, ExitError> {
-    let mut base_node_client = GrpcBaseNodeClient::new(config.indexer.base_node_grpc_address.unwrap_or_else(|| {
+    GrpcBaseNodeClient::connect(config.indexer.base_node_grpc_address.unwrap_or_else(|| {
         let port = grpc_default_port(ApplicationType::BaseNode, config.network);
         SocketAddr::new(IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)), port)
-    }));
-    base_node_client
-        .test_connection()
-        .await
-        .map_err(|error| ExitError::new(ExitCode::ConfigError, error))?;
-
-    Ok(base_node_client)
+    }))
+    .await
+    .map_err(|err| ExitError::new(ExitCode::ConfigError, format!("Could not connect to base node {}", err)))
 }

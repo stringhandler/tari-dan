@@ -23,7 +23,7 @@
 use async_trait::async_trait;
 use log::*;
 use tari_comms::types::CommsPublicKey;
-use tari_dan_core::{message::DanMessage, models::TariDanPayload, services::infrastructure_services::OutboundService};
+use tari_dan_p2p::{DanMessage, OutboundService};
 use tokio::sync::mpsc;
 
 use crate::{comms::Destination, p2p::services::messaging::MessagingError};
@@ -33,15 +33,15 @@ const LOG_TARGET: &str = "tari::validator_node::messages::outbound::validator_no
 #[derive(Debug, Clone)]
 pub struct OutboundMessaging {
     our_node_addr: CommsPublicKey,
-    sender: mpsc::Sender<(Destination<CommsPublicKey>, DanMessage<TariDanPayload, CommsPublicKey>)>,
-    loopback_sender: mpsc::Sender<DanMessage<TariDanPayload, CommsPublicKey>>,
+    sender: mpsc::Sender<(Destination<CommsPublicKey>, DanMessage<CommsPublicKey>)>,
+    loopback_sender: mpsc::Sender<DanMessage<CommsPublicKey>>,
 }
 
 impl OutboundMessaging {
     pub fn new(
         our_node_addr: CommsPublicKey,
-        sender: mpsc::Sender<(Destination<CommsPublicKey>, DanMessage<TariDanPayload, CommsPublicKey>)>,
-        loopback_sender: mpsc::Sender<DanMessage<TariDanPayload, CommsPublicKey>>,
+        sender: mpsc::Sender<(Destination<CommsPublicKey>, DanMessage<CommsPublicKey>)>,
+        loopback_sender: mpsc::Sender<DanMessage<CommsPublicKey>>,
     ) -> Self {
         Self {
             our_node_addr,
@@ -55,28 +55,19 @@ impl OutboundMessaging {
 impl OutboundService for OutboundMessaging {
     type Addr = CommsPublicKey;
     type Error = MessagingError;
-    type Payload = TariDanPayload;
 
-    async fn send(
-        &mut self,
-        _from: Self::Addr,
-        to: Self::Addr,
-        message: DanMessage<Self::Payload, Self::Addr>,
-    ) -> Result<(), MessagingError> {
-        // Comment this in to slow down messages for debugging
-        debug!(
-            target: LOG_TARGET,
-            "------------------------------------------------------\n",
-        );
-        // tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+    async fn send_self(&mut self, message: DanMessage<Self::Addr>) -> Result<(), MessagingError> {
+        trace!(target: LOG_TARGET, "Sending {:?} to self", message);
+        self.loopback_sender
+            .send(message)
+            .await
+            .map_err(|_| MessagingError::LoopbackSendFailed)?;
+        return Ok(());
+    }
 
+    async fn send(&mut self, to: Self::Addr, message: DanMessage<Self::Addr>) -> Result<(), MessagingError> {
         if to == self.our_node_addr {
-            debug!(target: LOG_TARGET, "Sending {:?} to self", message);
-            self.loopback_sender
-                .send(message)
-                .await
-                .map_err(|_| MessagingError::LoopbackSendFailed)?;
-            return Ok(());
+            return self.send_self(message).await;
         }
 
         self.sender
@@ -88,9 +79,8 @@ impl OutboundService for OutboundMessaging {
 
     async fn broadcast(
         &mut self,
-        _from: Self::Addr,
         committee: &[Self::Addr],
-        message: DanMessage<Self::Payload, Self::Addr>,
+        message: DanMessage<Self::Addr>,
     ) -> Result<(), MessagingError> {
         let (ours, theirs) = committee
             .iter()
@@ -113,11 +103,7 @@ impl OutboundService for OutboundMessaging {
         Ok(())
     }
 
-    async fn flood(
-        &mut self,
-        _from: Self::Addr,
-        message: DanMessage<Self::Payload, Self::Addr>,
-    ) -> Result<(), MessagingError> {
+    async fn flood(&mut self, message: DanMessage<Self::Addr>) -> Result<(), MessagingError> {
         self.sender
             .send((Destination::Flood, message))
             .await

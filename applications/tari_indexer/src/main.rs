@@ -20,7 +20,7 @@
 // WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 // USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-use std::{panic, process};
+use std::{fs, panic, process};
 
 use log::*;
 use tari_common::{exit_codes::ExitError, initialize_logging, load_configuration};
@@ -44,7 +44,10 @@ async fn main() {
         eprintln!("{:?}", err);
         error!(
             target: LOG_TARGET,
-            "Exiting with code ({}): {:?}", exit_code as i32, exit_code
+            "Exiting with code ({}) {:?}: {}",
+            exit_code as i32,
+            exit_code,
+            err.details.unwrap_or_default()
         );
         process::exit(exit_code as i32);
     }
@@ -56,7 +59,8 @@ async fn main_inner() -> Result<(), ExitError> {
     let cfg = load_configuration(config_path, true, &cli)?;
     let config = ApplicationConfig::load_from(&cfg)?;
     println!("Starting validator node on network {}", config.network);
-
+    // Remove the file if it was left behind by a previous run
+    let _file = fs::remove_file(config.common.base_path.join("pid"));
     let mut shutdown = Shutdown::new();
     if let Err(e) = initialize_logging(
         &cli.common.log_config_path("indexer"),

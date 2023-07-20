@@ -28,6 +28,7 @@ use serde::{de::DeserializeOwned, Serialize};
 use serde_json as json;
 use serde_json::json;
 use tari_comms_logging::LoggedMessage;
+use types::{GetClaimableFeesRequest, GetClaimableFeesResponse};
 
 use crate::types::{
     AddPeerRequest,
@@ -44,8 +45,8 @@ use crate::types::{
     GetTemplateResponse,
     GetTemplatesRequest,
     GetTemplatesResponse,
-    GetTransactionQcsRequest,
-    GetTransactionQcsResponse,
+    GetTransactionRequest,
+    GetTransactionResponse,
     GetTransactionResultRequest,
     GetTransactionResultResponse,
     SubmitTransactionRequest,
@@ -61,7 +62,6 @@ pub struct ValidatorNodeClient {
     request_id: i64,
 }
 
-// TODO: the client should return a proper error type
 impl ValidatorNodeClient {
     pub fn connect<T: IntoUrl>(endpoint: T) -> Result<Self, ValidatorNodeClientError> {
         let client = reqwest::Client::builder()
@@ -122,6 +122,13 @@ impl ValidatorNodeClient {
         self.send_request("get_substate", request).await
     }
 
+    pub async fn get_fees(
+        &mut self,
+        request: GetClaimableFeesRequest,
+    ) -> Result<GetClaimableFeesResponse, ValidatorNodeClientError> {
+        self.send_request("get_fees", request).await
+    }
+
     pub async fn get_template(
         &mut self,
         request: GetTemplateRequest,
@@ -129,26 +136,18 @@ impl ValidatorNodeClient {
         self.send_request("get_template", request).await
     }
 
-    // TODO: This call is broken because it returns a Vec<SQLTransaction>. Bring this in-line with other requests
-    // pub async fn get_transaction(
-    //     &mut self,
-    //     request: GetTransactionResponseRequest,
-    // ) -> Result<GetTransactionResponse, anyhow::Error> {
-    //     self.send_request("get_transaction", request).await
-    // }
+    pub async fn get_transaction(
+        &mut self,
+        request: GetTransactionRequest,
+    ) -> Result<GetTransactionResponse, ValidatorNodeClientError> {
+        self.send_request("get_transaction", request).await
+    }
 
     pub async fn get_transaction_result(
         &mut self,
         request: GetTransactionResultRequest,
     ) -> Result<GetTransactionResultResponse, ValidatorNodeClientError> {
         self.send_request("get_transaction_result", request).await
-    }
-
-    pub async fn get_transaction_quorum_certificates(
-        &mut self,
-        request: GetTransactionQcsRequest,
-    ) -> Result<GetTransactionQcsResponse, ValidatorNodeClientError> {
-        self.send_request("get_transaction_qcs", request).await
     }
 
     pub async fn get_recent_transactions(
@@ -198,7 +197,7 @@ impl ValidatorNodeClient {
         method: &str,
         params: T,
     ) -> Result<R, ValidatorNodeClientError> {
-        let params = json::to_value(params).map_err(|e| ValidatorNodeClientError::DeserializeResponse {
+        let params = json::to_value(params).map_err(|e| ValidatorNodeClientError::SerializeRequest {
             source: e,
             method: method.to_string(),
         })?;

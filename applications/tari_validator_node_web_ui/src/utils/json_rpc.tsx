@@ -20,14 +20,14 @@
 //  WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //  USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
-import { fromHexString, toHexString } from '../routes/VN/Components/helpers';
+import { fromHexString } from '../routes/VN/Components/helpers';
 
 async function jsonRpc(method: string, params: any = null) {
   let id = 0;
   id += 1;
   let address = 'localhost:18200';
   try {
-    let text = await (await fetch('json_rpc_address')).text();
+    let text = await (await fetch('/json_rpc_address')).text();
     if (/^\d+(\.\d+){3}:[0-9]+$/.test(text)) {
       address = text;
     }
@@ -75,7 +75,11 @@ async function getConnections() {
   return await jsonRpc('get_connections');
 }
 async function addPeer(public_key: string, addresses: string[]) {
-  return await jsonRpc('add_peer', {public_key, addresses, wait_for_dial: false});
+  return await jsonRpc('add_peer', {
+    public_key,
+    addresses,
+    wait_for_dial: false,
+  });
 }
 async function registerValidatorNode() {
   return await jsonRpc('register_validator_node');
@@ -86,13 +90,15 @@ async function getRecentTransactions() {
 async function getTransaction(payload_id: string) {
   return await jsonRpc('get_transaction', [fromHexString(payload_id)]);
 }
-async function getCurrentLeaderState(payload_id: string) {
-  return await jsonRpc('get_current_leader_state', [fromHexString(payload_id)]);
+async function getFees(epoch: number, claim_leader_public_key: string) {
+  return await jsonRpc('get_fees', [
+    fromHexString(claim_leader_public_key),
+    epoch,
+  ]);
 }
-async function getSubstates(payload_id: string, shard_id: string) {
-  return await jsonRpc('get_substates', [
+async function getSubstates(payload_id: string) {
+  return await jsonRpc('get_substates_created_by_transaction', [
     fromHexString(payload_id),
-    fromHexString(shard_id),
   ]);
 }
 async function getTemplates(limit: number) {
@@ -109,7 +115,6 @@ export {
   getCommsStats,
   getConnections,
   addPeer,
-  getCurrentLeaderState,
   getEpochManagerStats,
   getIdentity,
   getMempoolStats,
@@ -118,6 +123,7 @@ export {
   getTemplate,
   getTemplates,
   getTransaction,
+  getFees,
   getSubstates,
   registerValidatorNode,
 };

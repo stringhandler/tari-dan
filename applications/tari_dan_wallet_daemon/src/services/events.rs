@@ -1,14 +1,15 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
 
-use tari_common_types::types::FixedHash;
-use tari_dan_common_types::QuorumCertificate;
+use std::time::SystemTime;
+
 use tari_dan_wallet_sdk::models::TransactionStatus;
 use tari_engine_types::{
     commit_result::{FinalizeResult, RejectReason},
     substate::SubstateAddress,
 };
 use tari_template_lib::models::Amount;
+use tari_transaction::TransactionId;
 
 #[derive(Debug, Clone)]
 pub enum WalletEvent {
@@ -16,6 +17,7 @@ pub enum WalletEvent {
     TransactionFinalized(TransactionFinalizedEvent),
     TransactionInvalid(TransactionInvalidEvent),
     AccountChanged(AccountChangedEvent),
+    AuthLoginRequest(AuthLoginRequestEvent),
 }
 
 impl From<TransactionSubmittedEvent> for WalletEvent {
@@ -42,18 +44,32 @@ impl From<TransactionInvalidEvent> for WalletEvent {
     }
 }
 
+impl From<AuthLoginRequestEvent> for WalletEvent {
+    fn from(value: AuthLoginRequestEvent) -> Self {
+        Self::AuthLoginRequest(value)
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct TransactionSubmittedEvent {
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
+    /// Set to Some if this transaction results in a new account
+    pub new_account: Option<NewAccountInfo>,
+}
+
+#[derive(Debug, Clone)]
+pub struct NewAccountInfo {
+    pub name: Option<String>,
+    pub key_index: u64,
+    pub is_default: bool,
 }
 
 #[derive(Debug, Clone)]
 pub struct TransactionFinalizedEvent {
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub finalize: FinalizeResult,
     pub transaction_failure: Option<RejectReason>,
     pub final_fee: Amount,
-    pub qcs: Vec<QuorumCertificate>,
     pub status: TransactionStatus,
 }
 
@@ -64,7 +80,13 @@ pub struct AccountChangedEvent {
 
 #[derive(Debug, Clone)]
 pub struct TransactionInvalidEvent {
-    pub hash: FixedHash,
+    pub transaction_id: TransactionId,
     pub status: TransactionStatus,
     pub final_fee: Amount,
+}
+
+#[derive(Debug, Clone)]
+pub struct AuthLoginRequestEvent {
+    pub auth_token: String,
+    pub valid_till: SystemTime,
 }

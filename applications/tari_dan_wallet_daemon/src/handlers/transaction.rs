@@ -1,16 +1,21 @@
 //   Copyright 2023 The Tari Project
 //   SPDX-License-Identifier: BSD-3-Clause
-use std::{collections::HashSet, time::Duration};
+use std::{collections::HashSet, convert::TryFrom, time::Duration};
 
 use anyhow::anyhow;
 use futures::{future, future::Either};
 use log::*;
-use tari_dan_common_types::{optional::Optional, ShardId};
-use tari_dan_wallet_sdk::apis::key_manager;
+use tari_dan_common_types::optional::Optional;
+use tari_dan_wallet_sdk::apis::{jwt::JrpcPermission, key_manager};
 use tari_engine_types::{instruction::Instruction, substate::SubstateAddress};
-use tari_template_lib::{models::Amount, prelude::NonFungibleAddress};
+use tari_template_lib::{args, models::Amount};
 use tari_transaction::Transaction;
 use tari_wallet_daemon_client::types::{
+    AccountGetRequest,
+    AccountGetResponse,
+    CallInstructionRequest,
+    TransactionGetAllRequest,
+    TransactionGetAllResponse,
     TransactionGetRequest,
     TransactionGetResponse,
     TransactionGetResultRequest,
@@ -22,68 +27,104 @@ use tari_wallet_daemon_client::types::{
 };
 use tokio::time;
 
-use super::context::HandlerContext;
+use super::{accounts, context::HandlerContext};
 use crate::{
     handlers::HandlerError,
     services::{TransactionSubmittedEvent, WalletEvent},
 };
 
-const LOG_TARGET: &str = "tari::dan_wallet_daemon::handlers::transaction";
+const LOG_TARGET: &str = "tari::dan::wallet_daemon::handlers::transaction";
+
+pub async fn handle_submit_instruction(
+    context: &HandlerContext,
+    token: Option<String>,
+    req: CallInstructionRequest,
+) -> Result<TransactionSubmitResponse, anyhow::Error> {
+    let mut instructions = vec![req.instruction];
+    if let Some(dump_account) = req.dump_outputs_into {
+        instructions.push(Instruction::PutLastInstructionOutputOnWorkspace {
+            key: b"bucket".to_vec(),
+        });
+        let AccountGetResponse {
+            account: dump_account, ..
+        } = accounts::handle_get(context, token.clone(), AccountGetRequest {
+            name_or_address: dump_account,
+        })
+        .await?;
+        instructions.push(Instruction::CallMethod {
+            component_address: dump_account.address.as_component_address().unwrap(),
+            method: "deposit".to_string(),
+            args: args![Variable("bucket")],
+        });
+    }
+    let AccountGetResponse {
+        account: fee_account, ..
+    } = accounts::handle_get(context, token.clone(), AccountGetRequest {
+        name_or_address: req.fee_account,
+    })
+    .await?;
+    let request = TransactionSubmitRequest {
+        signing_key_index: Some(fee_account.key_index),
+        fee_instructions: vec![Instruction::CallMethod {
+            component_address: fee_account.address.as_component_address().unwrap(),
+            method: "pay_fee".to_string(),
+            args: args![Amount::try_from(req.fee)?],
+        }],
+        instructions,
+        inputs: req.inputs,
+        override_inputs: req.override_inputs.unwrap_or_default(),
+        new_outputs: req.new_outputs.unwrap_or(0),
+        specific_non_fungible_outputs: req.specific_non_fungible_outputs,
+        new_resources: req.new_resources,
+        new_non_fungible_outputs: req.new_non_fungible_outputs,
+        new_non_fungible_index_outputs: req.new_non_fungible_index_outputs,
+        is_dry_run: req.is_dry_run,
+        proof_ids: vec![],
+    };
+    handle_submit(context, token, request).await
+}
 
 pub async fn handle_submit(
     context: &HandlerContext,
+    token: Option<String>,
     req: TransactionSubmitRequest,
 ) -> Result<TransactionSubmitResponse, anyhow::Error> {
     let sdk = context.wallet_sdk();
+    // TODO: fine-grained checks of individual addresses involved (resources, components, etc)
+    sdk.jwt_api()
+        .check_auth(token, &[JrpcPermission::TransactionSend(None)])?;
     let key_api = sdk.key_manager_api();
     // Fetch the key to sign the transaction
     // TODO: Ideally the SDK should take care of signing the transaction internally
     let (_, key) = key_api.get_key_or_active(key_manager::TRANSACTION_BRANCH, req.signing_key_index)?;
 
-    // let transaction_api = sdk.transaction_api();
     let inputs = if req.override_inputs {
         req.inputs
     } else {
         // If we are not overriding inputs, we will use inputs that we know about in the local substate address db
         let mut substates = get_referenced_component_addresses(&req.instructions);
         substates.extend(get_referenced_component_addresses(&req.fee_instructions));
+        let substates = substates.iter().collect::<Vec<_>>();
         let loaded_dependent_substates = sdk
             .substate_api()
-            .load_dependent_substates(&substates.into_iter().collect::<Vec<_>>())?;
+            .locate_dependent_substates(&substates)
+            .await?
+            .into_iter()
+            .map(Into::into)
+            .collect();
         vec![req.inputs, loaded_dependent_substates].concat()
     };
-
-    // TODO: we assume that all inputs will be consumed and produce a new output however this is only the case when the
-    //       object is mutated
-    let mut outputs = inputs
-        .iter()
-        .map(|versioned_addr| ShardId::from_address(&versioned_addr.address, versioned_addr.version + 1))
-        .collect::<Vec<_>>();
-
-    outputs.extend(req.specific_non_fungible_outputs.into_iter().map(|(resx_addr, id)| {
-        ShardId::from_address(&SubstateAddress::NonFungible(NonFungibleAddress::new(resx_addr, id)), 0)
-    }));
-
-    let inputs = inputs
-        .into_iter()
-        .map(|versioned_addr| ShardId::from_address(&versioned_addr.address, versioned_addr.version))
-        .collect::<Vec<_>>();
 
     let transaction = Transaction::builder()
         .with_instructions(req.instructions)
         .with_fee_instructions(req.fee_instructions)
-        .with_inputs(inputs.clone())
-        .with_outputs(outputs.clone())
-        .with_new_outputs(req.new_outputs)
-        .with_new_non_fungible_outputs(req.new_non_fungible_outputs)
-        .with_new_non_fungible_index_outputs(req.new_non_fungible_index_outputs)
-        .sign(&key.k)
+        .sign(&key.key)
         .build();
 
     for proof_id in req.proof_ids {
         // update the proofs table with the corresponding transaction hash
         sdk.confidential_outputs_api()
-            .proofs_set_transaction_hash(proof_id, *transaction.hash())?;
+            .proofs_set_transaction_hash(proof_id, *transaction.id())?;
     }
 
     info!(
@@ -91,76 +132,126 @@ pub async fn handle_submit(
         "Submitted transaction with hash {}",
         transaction.hash()
     );
-    let hash = if req.is_dry_run {
-        sdk.transaction_api().submit_dry_run_to_vn(transaction).await?
+    if req.is_dry_run {
+        let response = sdk
+            .transaction_api()
+            .submit_dry_run_transaction(transaction, inputs.clone())
+            .await?;
+
+        Ok(TransactionSubmitResponse {
+            transaction_id: response.transaction_id,
+            result: response.execution_result,
+            inputs,
+        })
     } else {
-        sdk.transaction_api().submit_to_vn(transaction).await?
-    };
+        let transaction_id = sdk
+            .transaction_api()
+            .submit_transaction(transaction, inputs.clone())
+            .await?;
 
-    if !req.is_dry_run {
-        context.notifier().notify(TransactionSubmittedEvent { hash });
+        context.notifier().notify(TransactionSubmittedEvent {
+            transaction_id,
+            new_account: None,
+        });
+
+        Ok(TransactionSubmitResponse {
+            transaction_id,
+            inputs,
+            result: None,
+        })
     }
-
-    Ok(TransactionSubmitResponse { hash, inputs, outputs })
 }
 
 pub async fn handle_get(
     context: &HandlerContext,
+    token: Option<String>,
     req: TransactionGetRequest,
 ) -> Result<TransactionGetResponse, anyhow::Error> {
+    context
+        .wallet_sdk()
+        .jwt_api()
+        .check_auth(token, &[JrpcPermission::TransactionGet])?;
     let transaction = context
         .wallet_sdk()
         .transaction_api()
-        .get(req.hash)
+        .get(req.transaction_id)
         .optional()?
         .ok_or(HandlerError::NotFound)?;
 
     Ok(TransactionGetResponse {
-        hash: req.hash,
         transaction: transaction.transaction,
         result: transaction.finalize,
         status: transaction.status,
+        transaction_failure: transaction.transaction_failure,
+    })
+}
+
+pub async fn handle_get_all_by_status(
+    context: &HandlerContext,
+    token: Option<String>,
+    req: TransactionGetAllRequest,
+) -> Result<TransactionGetAllResponse, anyhow::Error> {
+    context
+        .wallet_sdk()
+        .jwt_api()
+        .check_auth(token, &[JrpcPermission::TransactionGet])?;
+    let transactions = match req.status {
+        Some(status) => context.wallet_sdk().transaction_api().fetch_all_by_status(status)?,
+        None => context.wallet_sdk().transaction_api().fetch_all()?,
+    };
+    Ok(TransactionGetAllResponse {
+        transactions: transactions
+            .into_iter()
+            .map(|tx| (tx.transaction, tx.finalize, tx.status, tx.transaction_failure))
+            .collect(),
     })
 }
 
 pub async fn handle_get_result(
     context: &HandlerContext,
+    token: Option<String>,
     req: TransactionGetResultRequest,
 ) -> Result<TransactionGetResultResponse, anyhow::Error> {
+    context
+        .wallet_sdk()
+        .jwt_api()
+        .check_auth(token, &[JrpcPermission::TransactionGet])?;
     let transaction = context
         .wallet_sdk()
         .transaction_api()
-        .get(req.hash)
+        .get(req.transaction_id)
         .optional()?
         .ok_or(HandlerError::NotFound)?;
 
     Ok(TransactionGetResultResponse {
-        hash: req.hash,
+        transaction_id: req.transaction_id,
         result: transaction.finalize,
-        // TODO: Populate QC
-        qc: None,
         status: transaction.status,
     })
 }
 
 pub async fn handle_wait_result(
     context: &HandlerContext,
+    token: Option<String>,
     req: TransactionWaitResultRequest,
 ) -> Result<TransactionWaitResultResponse, anyhow::Error> {
+    context
+        .wallet_sdk()
+        .jwt_api()
+        .check_auth(token, &[JrpcPermission::TransactionGet])?;
     let mut events = context.notifier().subscribe();
     let transaction = context
         .wallet_sdk()
         .transaction_api()
-        .get(req.hash)
+        .get(req.transaction_id)
         .optional()?
         .ok_or(HandlerError::NotFound)?;
 
     if let Some(result) = transaction.finalize {
         return Ok(TransactionWaitResultResponse {
-            hash: req.hash,
+            transaction_id: req.transaction_id,
             result: Some(result),
             status: transaction.status,
-            qcs: transaction.qcs,
             final_fee: transaction.final_fee.unwrap_or_default(),
             timed_out: false,
             transaction_failure: transaction.transaction_failure,
@@ -185,22 +276,20 @@ pub async fn handle_wait_result(
         };
 
         match evt_or_timeout {
-            Some(WalletEvent::TransactionFinalized(event)) if event.hash == req.hash => {
+            Some(WalletEvent::TransactionFinalized(event)) if event.transaction_id == req.transaction_id => {
                 return Ok(TransactionWaitResultResponse {
-                    hash: req.hash,
+                    transaction_id: req.transaction_id,
                     result: Some(event.finalize),
-                    qcs: event.qcs,
                     status: event.status,
                     transaction_failure: event.transaction_failure,
                     final_fee: event.final_fee,
                     timed_out: false,
                 });
             },
-            Some(WalletEvent::TransactionInvalid(event)) if event.hash == req.hash => {
+            Some(WalletEvent::TransactionInvalid(event)) if event.transaction_id == req.transaction_id => {
                 return Ok(TransactionWaitResultResponse {
-                    hash: req.hash,
+                    transaction_id: req.transaction_id,
                     result: None,
-                    qcs: vec![],
                     status: event.status,
                     transaction_failure: None,
                     final_fee: event.final_fee,
@@ -210,9 +299,8 @@ pub async fn handle_wait_result(
             Some(_) => continue,
             None => {
                 return Ok(TransactionWaitResultResponse {
-                    hash: req.hash,
+                    transaction_id: req.transaction_id,
                     result: None,
-                    qcs: vec![],
                     status: transaction.status,
                     transaction_failure: transaction.transaction_failure,
                     final_fee: Amount::zero(),

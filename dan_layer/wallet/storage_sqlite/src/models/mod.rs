@@ -14,7 +14,10 @@ mod substate;
 pub use substate::Substate;
 
 mod transaction;
-pub use transaction::Transaction;
+pub use transaction::{InputsAndOutputs, Transaction};
 
 mod vault;
 pub use vault::Vault;
+
+mod non_fungible_tokens;
+pub use non_fungible_tokens::NonFungibleToken;

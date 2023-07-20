@@ -26,15 +26,14 @@ use log::*;
 use tari_comms::{
     connectivity::{ConnectivityEvent, ConnectivityRequester},
     peer_manager::{NodeId, PeerFeatures, PeerIdentityClaim},
+    protocol::rpc::NamedProtocolService,
     types::CommsPublicKey,
     NodeIdentity,
     PeerConnection,
 };
 use tari_dan_common_types::optional::Optional;
-use tari_dan_core::{
-    message::{DanMessage, NetworkAnnounce},
-    services::{infrastructure_services::OutboundService, DanPeer, PeerProvider},
-};
+use tari_dan_p2p::{DanMessage, DanPeer, NetworkAnnounce, OutboundService, PeerProvider};
+use tari_validator_node_rpc::peer_sync::PeerSyncProtocol;
 use tokio::{
     sync::{mpsc, Semaphore},
     task,
@@ -43,7 +42,7 @@ use tokio::{
 use crate::p2p::services::{
     comms_peer_provider::CommsPeerProvider,
     messaging::OutboundMessaging,
-    networking::{handle::NetworkingRequest, peer_sync::PeerSyncProtocol, NetworkingError},
+    networking::{handle::NetworkingRequest, NetworkingError},
 };
 
 const LOG_TARGET: &str = "tari::validator_node::p2p::services::networking";
@@ -123,7 +122,9 @@ impl Networking {
         match event {
             ConnectivityEvent::PeerConnected(conn) => {
                 debug!(target: LOG_TARGET, "📡 Peer connected: {}", conn);
-                self.initiate_sync_protocol(conn.as_ref().clone());
+                if self.is_vn_protocol_supported(&conn).await? {
+                    self.initiate_sync_protocol(*conn);
+                }
             },
             evt => {
                 debug!(target: LOG_TARGET, "ℹ️  Network event: {}", evt);
@@ -141,14 +142,11 @@ impl Networking {
 
                 let res = self
                     .outbound
-                    .flood(
-                        Default::default(),
-                        DanMessage::NetworkAnnounce(Box::new(NetworkAnnounce {
-                            identity: self.node_identity.public_key().clone(),
-                            addresses: self.node_identity.public_addresses(),
-                            identity_signature,
-                        })),
-                    )
+                    .flood(DanMessage::NetworkAnnounce(Box::new(NetworkAnnounce {
+                        identity: self.node_identity.public_key().clone(),
+                        addresses: self.node_identity.public_addresses(),
+                        identity_signature,
+                    })))
                     .await;
                 let _ignore = reply.send(res.map_err(Into::into));
             },
@@ -191,39 +189,32 @@ impl Networking {
             ));
         }
 
-        match self.peer_provider.get_peer(&announce.identity).await.optional()? {
-            Some(existing_peer) => {
-                // TODO: Verify identity signatures
-                // let candidate = peer
-                //     .identity_signature
-                //     .as_ref()
-                //     .ok_or_else(|| anyhow!("Identity signature for announce message is empty"))?;
-                // if existing_peer
-                //     .identity_signature
-                //     .as_ref()
-                //     .map(|id| candidate.updated_at() > id.updated_at())
-                //     .unwrap_or(true)
-                // {
-
-                // If there was an update, we forward the announce to other peers
-                if existing_peer.addresses != peer.addresses {
-                    self.peer_provider.update_peer(peer).await?;
-
-                    // TODO: should not forward announce to sending peer
-                    self.outbound
-                        .flood(Default::default(), DanMessage::NetworkAnnounce(Box::new(announce)))
-                        .await?;
-                }
-            },
-            None => {
-                self.peer_provider.add_peer(peer).await?;
-                self.outbound
-                    .flood(Default::default(), DanMessage::NetworkAnnounce(Box::new(announce)))
-                    .await?;
-            },
+        if self
+            .peer_provider
+            .get_peer(&announce.identity)
+            .await
+            .optional()?
+            .is_none()
+        {
+            self.peer_provider.add_peer(peer).await?;
+            self.outbound
+                .flood(DanMessage::NetworkAnnounce(Box::new(announce)))
+                .await?;
         }
 
         Ok(())
+    }
+
+    async fn is_vn_protocol_supported(&self, conn: &PeerConnection) -> Result<bool, NetworkingError> {
+        let peer = self.peer_provider.get_peer_by_node_id(conn.peer_node_id()).await?;
+        let is_supported = self
+            .peer_provider
+            .is_protocol_supported(
+                &peer.identity,
+                tari_validator_node_rpc::rpc_service::ValidatorNodeRpcClient::PROTOCOL_NAME,
+            )
+            .await?;
+        Ok(is_supported)
     }
 
     fn initiate_sync_protocol(&self, conn: PeerConnection) {

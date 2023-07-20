@@ -20,15 +20,60 @@
 //   WHETHER IN CONTRACT, STRICT LIABILITY, OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE
 //   USE OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+use std::fmt::{self, Display, Formatter};
+
+use ciborium::tag::Required;
 use serde::{Deserialize, Serialize};
-use tari_template_lib::Hash;
+use tari_template_lib::{models::BinaryTag, Hash, HashParseError};
 
 use crate::{
+    events::Event,
     fees::{FeeCostBreakdown, FeeReceipt},
     instruction_result::InstructionResult,
     logs::LogEntry,
+    serde_with,
     substate::SubstateDiff,
 };
+
+const TAG: u64 = BinaryTag::TransactionReceipt.as_u64();
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub struct TransactionReceiptAddress(Required<Hash, TAG>);
+
+impl TransactionReceiptAddress {
+    pub const fn new(address: Hash) -> Self {
+        Self(Required(address))
+    }
+
+    pub fn hash(&self) -> &Hash {
+        &self.0 .0
+    }
+
+    pub fn from_hex(hex: &str) -> Result<Self, HashParseError> {
+        let hash = Hash::from_hex(hex)?;
+        Ok(Self::new(hash))
+    }
+}
+
+impl<T: Into<Hash>> From<T> for TransactionReceiptAddress {
+    fn from(address: T) -> Self {
+        Self::new(address.into())
+    }
+}
+
+impl Display for TransactionReceiptAddress {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        write!(f, "txreceipt_{}", self.0 .0)
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TransactionReceipt {
+    pub transaction_hash: Hash,
+    pub events: Vec<Event>,
+    pub logs: Vec<LogEntry>,
+    pub fee_receipt: Option<FeeReceipt>,
+}
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ExecuteResult {
@@ -53,7 +98,7 @@ impl ExecuteResult {
 
     pub fn expect_failure(&self) -> &RejectReason {
         match self.finalize.result {
-            TransactionResult::Accept(_) => panic!("Transaction succeeded"),
+            TransactionResult::Accept(_) => panic!("Expected transaction to fail but it succeeded"),
             TransactionResult::Reject(ref reason) => reason,
         }
     }
@@ -82,9 +127,10 @@ impl ExecuteResult {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct FinalizeResult {
+    #[serde(with = "serde_with::hex")]
     pub transaction_hash: Hash,
+    pub events: Vec<Event>,
     pub logs: Vec<LogEntry>,
-    // TOOD: Remove from FinalizeResult
     pub execution_results: Vec<InstructionResult>,
     pub result: TransactionResult,
     pub cost_breakdown: Option<FeeCostBreakdown>,
@@ -94,12 +140,14 @@ impl FinalizeResult {
     pub fn new(
         transaction_hash: Hash,
         logs: Vec<LogEntry>,
+        events: Vec<Event>,
         result: TransactionResult,
         cost_breakdown: FeeCostBreakdown,
     ) -> Self {
         Self {
             transaction_hash,
             logs,
+            events,
             execution_results: Vec::new(),
             result,
             cost_breakdown: Some(cost_breakdown),
@@ -110,6 +158,7 @@ impl FinalizeResult {
         Self {
             transaction_hash,
             logs: vec![],
+            events: vec![],
             execution_results: Vec::new(),
             result: TransactionResult::Reject(reason),
             cost_breakdown: None,
@@ -156,6 +205,15 @@ impl TransactionResult {
             Self::Reject(reject_result) => {
                 panic!("{}: {:?}", msg, reject_result);
             },
+        }
+    }
+}
+
+impl Display for TransactionResult {
+    fn fmt(&self, f: &mut Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Accept(diff) => write!(f, "Accept({} up, {} down)", diff.up_len(), diff.down_len()),
+            Self::Reject(reason) => write!(f, "Reject: {}", reason),
         }
     }
 }

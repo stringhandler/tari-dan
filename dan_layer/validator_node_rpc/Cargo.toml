@@ -1,0 +1,41 @@
+[package]
+name = "tari_validator_node_rpc"
+authors = ["The Tari Development Community"]
+description = "This crate is to provide a single source for all cross application grpc files and conversions to and from tari-dan applications"
+repository = "https://github.com/tari-project/tari-dan"
+license = "BSD-3-Clause"
+version = "0.50.0-pre.0"
+edition = "2021"
+
+[dependencies]
+tari_common_types = { git = "https://github.com/tari-project/tari.git", tag = "v0.51.0-pre.4" }
+tari_comms = { git = "https://github.com/tari-project/tari.git", tag = "v0.51.0-pre.4" }
+tari_comms_rpc_macros = { git = "https://github.com/tari-project/tari.git", tag = "v0.51.0-pre.4" }
+tari_crypto = { version = "0.17" }
+
+tari_consensus = { path = "../consensus" }
+tari_dan_common_types = { path = "../common_types" }
+tari_dan_p2p = { path = "../p2p" }
+tari_dan_storage = { path = "../storage" }
+tari_engine_types = { path = "../engine_types" }
+tari_template_lib = { path = "../template_lib" }
+tari_transaction = { path = "../transaction" }
+tari_bor = { path = "../tari_bor" }
+
+anyhow = "1.0.53"
+async-trait = "0.1"
+chrono = "0.4.22"
+log = "0.4"
+prost = "0.9"
+serde = "1.0"
+thiserror = "1.0"
+tokio-stream = "0.1"
+
+[build-dependencies]
+tari_common = { git = "https://github.com/tari-project/tari.git", tag = "v0.51.0-pre.4", package = "tari_common", features = ["build"] }
+
+[package.metadata.cargo-machete]
+ignored = [
+    # Used via OUT_DIR macro, not detectable
+    "prost",
+]

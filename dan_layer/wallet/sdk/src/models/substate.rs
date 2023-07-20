@@ -5,8 +5,8 @@ use std::{fmt::Display, str::FromStr};
 
 use serde::{Deserialize, Serialize};
 use tari_common_types::types::FixedHash;
-use tari_dan_common_types::serde_with;
-use tari_engine_types::substate::SubstateAddress;
+use tari_engine_types::{serde_with, substate::SubstateAddress, TemplateAddress};
+use tari_transaction::SubstateRequirement;
 
 #[derive(Debug, Clone)]
 pub struct SubstateModel {
@@ -14,6 +14,7 @@ pub struct SubstateModel {
     pub address: VersionedSubstateAddress,
     pub parent_address: Option<SubstateAddress>,
     pub transaction_hash: FixedHash,
+    pub template_address: Option<TemplateAddress>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -54,3 +55,9 @@ impl Display for VersionedSubstateAddress {
 #[derive(Debug, thiserror::Error)]
 #[error("Failed to parse versioned substate address {0}")]
 pub struct VersionedSubstateAddressParseError(String);
+
+impl From<VersionedSubstateAddress> for SubstateRequirement {
+    fn from(value: VersionedSubstateAddress) -> Self {
+        Self::new(value.address, Some(value.version))
+    }
+}
