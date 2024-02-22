@@ -39,6 +39,15 @@ pub struct LiquidGeneratorOpts {
     pub variables: HashMap<String, serde_json::Value>,
 }
 
+impl Default for LiquidGeneratorOpts {
+    fn default() -> Self {
+        Self {
+            skip_format: false,
+            variables: HashMap::new(),
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy)]
 pub enum GeneratorType {
     RustTemplateCli,

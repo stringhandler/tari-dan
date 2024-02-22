@@ -69,7 +69,7 @@ impl LiquidGenerator {
     }
 
     fn build_vars(&self, template: &TemplateDefinition) -> liquid_core::Object {
-        let opts = self.opts.liquid.as_ref().unwrap();
+        let opts = self.opts.liquid.as_ref().map(|r| r.clone()).unwrap_or_default();
 
         let mut globals = liquid::object!({
             "template_name": &template.name,

@@ -127,6 +127,8 @@ fn get_function_block(template_ident: &Ident, ast: FunctionAst) -> Expr {
             TypeAst::Typed { type_path, .. } => {
                 args.push(parse_quote! { #arg_ident });
                 stmts.push(parse_quote! {
+                    dbg!(#type_path);
+                    dbg!(&call_info.args[#i]);
                     let #arg_ident = from_value::<#type_path>(&call_info.args[#i])
                         .unwrap_or_else(|e| panic!("failed to decode argument at position {} for function '{}': {}", #i, #func_name, e));
                 })
