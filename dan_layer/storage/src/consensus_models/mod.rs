@@ -26,10 +26,12 @@ mod transaction_pool_status_update;
 mod validated_block;
 mod vote;
 mod vote_signature;
+mod epoch_ending;
 
 pub use block::*;
 pub use command::*;
 pub use executed_transaction::*;
+pub use epoch_ending::*;
 pub use foreign_proposal::*;
 pub use foreign_receive_counters::*;
 pub use foreign_send_counters::*;

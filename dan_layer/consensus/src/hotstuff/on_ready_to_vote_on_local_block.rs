@@ -309,6 +309,9 @@ where TConsensusSpec: ConsensusSpec
                 },
                 Command::Accept(_) => {},
                 Command::ForeignProposal(_) => {},
+                Command::EpochEnding(_) => {
+                    todo!()
+                }
             }
         }
 
@@ -673,6 +676,9 @@ where TConsensusSpec: ConsensusSpec
                         }
                     },
                     Command::ForeignProposal(_) => panic!("Should not be here"),
+                    Command::EpochEnding(_) => {
+                        todo!()
+                    }
                 }
             } else {
                 let foreign_proposal = cmd.foreign_proposal().unwrap();
@@ -1143,6 +1149,9 @@ where TConsensusSpec: ConsensusSpec
                     finalized_transactions.push(t.clone());
                 },
                 Command::ForeignProposal(_) => {},
+                Command::EpochEnding(_) => {
+                    todo!();
+                }
             }
         }
 

@@ -60,6 +60,7 @@ message Command {
     TransactionAtom local_prepared = 2;
     TransactionAtom accept = 3;
     ForeignProposal foreign_proposal = 4;
+    EpochEnding epoch_ending = 5;
   }
 }
 
@@ -76,6 +77,18 @@ message ForeignProposal {
   ForeignProposalState state = 3;
   uint64 mined_at = 4;
   repeated bytes transactions = 5;
+}
+
+message EpochEnding {
+    uint64 epoch = 1;
+    EpochEndingAction action = 2;
+}
+
+enum EpochEndingAction {
+    UNKNOWN_EPOCH_ENDING_ACTION = 0;
+    CONTINUE_WITH_CURRENT_SHARD = 1;
+    MERGE_INTO_SHARD = 2;
+    SPLIT_IN_TWO = 3;
 }
 
 message TransactionAtom {

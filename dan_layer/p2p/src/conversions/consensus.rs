@@ -38,21 +38,7 @@ use tari_consensus::messages::{
 };
 use tari_crypto::tari_utilities::ByteArray;
 use tari_dan_common_types::{shard::Shard, Epoch, NodeHeight, ValidatorMetadata};
-use tari_dan_storage::consensus_models::{
-    BlockId,
-    Command,
-    Decision,
-    Evidence,
-    ForeignProposal,
-    ForeignProposalState,
-    HighQc,
-    QcId,
-    QuorumCertificate,
-    QuorumDecision,
-    SubstateDestroyed,
-    SubstateRecord,
-    TransactionAtom,
-};
+use tari_dan_storage::consensus_models::{BlockId, Command, Decision, EpochEndAction, EpochEnding, Evidence, ForeignProposal, ForeignProposalState, HighQc, QcId, QuorumCertificate, QuorumDecision, SubstateDestroyed, SubstateRecord, TransactionAtom};
 use tari_engine_types::substate::{SubstateId, SubstateValue};
 use tari_transaction::TransactionId;
 
@@ -308,6 +294,10 @@ impl From<&Command> for proto::consensus::Command {
             Command::ForeignProposal(foreign_proposal) => {
                 proto::consensus::command::Command::ForeignProposal(foreign_proposal.into())
             },
+            Command::EpochEnding(e) => {
+               proto::consensus::command::Command::EpochEnding(e.into())
+            }
+
         };
 
         Self { command: Some(command) }
@@ -326,6 +316,9 @@ impl TryFrom<proto::consensus::Command> for Command {
             proto::consensus::command::Command::ForeignProposal(foreign_proposal) => {
                 Command::ForeignProposal(foreign_proposal.try_into()?)
             },
+            proto::consensus::command::Command::EpochEnding(ee) => {
+                todo!()
+            }
         })
     }
 }
@@ -426,6 +419,21 @@ impl TryFrom<proto::consensus::ForeignProposal> for ForeignProposal {
         })
     }
 }
+
+impl From<&EpochEnding> for proto::consensus::EpochEnding {
+    fn from(value: &EpochEnding) -> Self {
+        todo!()
+        // Self {
+        //     epoch: value.epoch.as_u64(),
+        //     action : match value.action {
+        //         EpochEndAction::ContinueWithCurrentShard => { proto::consensus::EpochEndingAction::CONTINUE_WITH_CURRENT_SHARD }
+        //         EpochEndAction::MergeIntoShard { .. } => { proto::consensus::EpochEndingAction::MERGE_INTO_SHARD}
+        //         EpochEndAction::SplitInTwo { .. } => { proto::consensus::EpochEndingAction::SPLIT_IN_TWO}
+        //     }
+        // }
+    }
+}
+
 
 // -------------------------------- Decision -------------------------------- //
 

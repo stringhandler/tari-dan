@@ -8,7 +8,7 @@ use std::{
 
 use indexmap::{IndexMap, IndexSet};
 use serde::{Deserialize, Serialize};
-use tari_dan_common_types::SubstateAddress;
+use tari_dan_common_types::{Epoch, SubstateAddress};
 use tari_engine_types::lock::LockFlag;
 use tari_transaction::TransactionId;
 #[cfg(feature = "ts")]
@@ -20,6 +20,7 @@ use crate::{
     StateStoreReadTransaction,
     StorageError,
 };
+use crate::consensus_models::epoch_ending::EpochEnding;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Default)]
 #[cfg_attr(feature = "ts", derive(TS), ts(export, export_to = "../../bindings/src/types/"))]
@@ -171,12 +172,14 @@ pub enum Command {
     LocalPrepared(TransactionAtom),
     Accept(TransactionAtom),
     ForeignProposal(ForeignProposal),
+    EpochEnding(EpochEnding)
 }
 
 #[derive(PartialEq, Eq, Ord, PartialOrd)]
 pub enum CommandId {
     TransactionId(TransactionId),
     ForeignProposal(ForeignProposal),
+    EpochEnding(Epoch)
 }
 
 impl Display for CommandId {
@@ -184,6 +187,7 @@ impl Display for CommandId {
         match self {
             CommandId::TransactionId(id) => write!(f, "Transaction({})", id),
             CommandId::ForeignProposal(fp) => write!(f, "ForeignProposal({})", fp.block_id),
+            CommandId::EpochEnding(e) => write!(f, "EpochEnding({})", e)
         }
     }
 }
@@ -195,6 +199,7 @@ impl Command {
             Command::LocalPrepared(tx) => Some(tx),
             Command::Accept(tx) => Some(tx),
             Command::ForeignProposal(_) => None,
+            Command::EpochEnding(_) => None
         }
     }
 
@@ -204,6 +209,7 @@ impl Command {
             Command::LocalPrepared(tx) => CommandId::TransactionId(tx.id),
             Command::Accept(tx) => CommandId::TransactionId(tx.id),
             Command::ForeignProposal(foreign_proposal) => CommandId::ForeignProposal(foreign_proposal.clone()),
+            Command::EpochEnding(e)=> CommandId::EpochEnding(e.epoch)
         }
     }
 
@@ -213,6 +219,7 @@ impl Command {
             Command::LocalPrepared(tx) => tx.decision,
             Command::Accept(tx) => tx.decision,
             Command::ForeignProposal(_) => panic!("ForeignProposal does not have a decision"),
+            Command::EpochEnding(_) => panic!("EpochEnding does not have a decision")
         }
     }
 
@@ -250,6 +257,7 @@ impl Command {
             Command::LocalPrepared(tx) => tx.evidence.shards_iter(),
             Command::Accept(tx) => tx.evidence.shards_iter(),
             Command::ForeignProposal(_) => panic!("ForeignProposal does not have involved shards"),
+            Command::EpochEnding(_) => panic!("EpochEnding does not have involved shards")
         }
     }
 
@@ -259,6 +267,7 @@ impl Command {
             Command::LocalPrepared(tx) => &tx.evidence,
             Command::Accept(tx) => &tx.evidence,
             Command::ForeignProposal(_) => panic!("ForeignProposal does not have evidence"),
+            Command::EpochEnding(_) => panic!("EpochEnding does not have evidence")
         }
     }
 }
@@ -282,6 +291,7 @@ impl Display for Command {
             Command::LocalPrepared(tx) => write!(f, "LocalPrepared({}, {})", tx.id, tx.decision),
             Command::Accept(tx) => write!(f, "Accept({}, {})", tx.id, tx.decision),
             Command::ForeignProposal(fp) => write!(f, "ForeignProposal {}", fp.block_id),
+            Command::EpochEnding(e) => write!(f, "EpochEnding {}", e.epoch)
         }
     }
 }
