@@ -13,6 +13,7 @@ mod substate;
 mod utxo_update;
 mod vault;
 mod wallet_transaction;
+#[cfg(feature = "webauthn")]
 mod webauthn_registration;
 
 pub use account::*;
@@ -27,6 +28,7 @@ pub use substate::*;
 pub use utxo_update::*;
 pub use vault::*;
 pub use wallet_transaction::*;
+#[cfg(feature = "webauthn")]
 pub use webauthn_registration::*;
 
 pub type WalletLockId = i32;

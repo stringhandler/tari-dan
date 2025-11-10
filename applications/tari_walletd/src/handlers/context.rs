@@ -12,7 +12,6 @@ use tari_ootle_wallet_storage_sqlite::SqliteWalletStore;
 use tari_shutdown::ShutdownSignal;
 use tari_transaction::{Transaction, TransactionBuilder};
 use tari_wallet_daemon_client::permissions::JrpcPermission;
-use webauthn_rs::Webauthn;
 
 use crate::{
     config::WalletDaemonConfig,
@@ -20,7 +19,6 @@ use crate::{
         jwt::{JwtApi, JwtApiError},
         WalletAuthenticator,
     },
-    services::WebauthnService,
     WalletSdk,
 };
 
@@ -98,10 +96,12 @@ impl HandlerContext {
         &self.authenticator
     }
 
+    #[cfg(feature = "webauthn")]
     pub fn webauthn_service(&self) -> Option<&WebauthnService<SqliteWalletStore>> {
         self.authenticator.webauthn_service()
     }
 
+    #[cfg(feature = "webauthn")]
     pub fn webauthn(&self) -> Option<&Webauthn> {
         self.authenticator.webauthn()
     }

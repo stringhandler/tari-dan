@@ -16,7 +16,9 @@ tari_ootle_app_utilities = { workspace = true }
 tari_shutdown = { workspace = true }
 tari_ootle_wallet_crypto = { workspace = true }
 tari_ootle_wallet_sdk = { workspace = true }
-tari_ootle_wallet_sdk_services = { workspace = true, features = ["indexer_client"] }
+tari_ootle_wallet_sdk_services = { workspace = true, features = [
+    "indexer_client",
+] }
 tari_ootle_wallet_storage_sqlite = { workspace = true }
 tari_transaction = { workspace = true }
 tari_ootle_common_types = { workspace = true }
@@ -66,7 +68,7 @@ tokio = { workspace = true, features = [
 tower-http = { workspace = true, features = ["cors", "trace"] }
 url = { workspace = true }
 webrtc = { workspace = true }
-webauthn-rs = { workspace = true }
+webauthn-rs = { workspace = true, optional = true }
 uuid = { workspace = true }
 wasm-opt = "0.116.1"
 tempfile.workspace = true
@@ -85,5 +87,6 @@ ignored = [
 ]
 
 [features]
-default = ["web_ui"]
+default = []
 web_ui = ["include_dir"]
+webauthn = ["webauthn-rs"]

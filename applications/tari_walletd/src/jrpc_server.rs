@@ -23,7 +23,7 @@ use tari_ootle_app_utilities::tcp::try_bind_with_fallback;
 use tokio::task;
 use tower_http::{cors::CorsLayer, trace::TraceLayer};
 
-use super::handlers::{stealth_utxos, substates, templates, wallet, webauthn, HandlerContext};
+use super::handlers::{stealth_utxos, substates, templates, wallet, HandlerContext};
 use crate::handlers::{
     accounts,
     auth::jwt::JwtApiError,
@@ -92,6 +92,7 @@ async fn handler(
             "method" => call_handler(context, value, token, rpc::handle_get_auth_method).await,
             _ => Ok(value.method_not_found(&value.method)),
         },
+        #[cfg(feature = "webauthn")]
         Some(("webauthn", method)) => match method {
             "already_registered" => call_handler(context, value, token, webauthn::handle_already_registered).await,
             "reg_start" => call_handler(context, value, token, webauthn::handle_start_registration).await,

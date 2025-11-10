@@ -56,6 +56,7 @@ use tari_template_lib::{
 use tari_transaction::{Transaction, TransactionId};
 use tari_utilities::hex::Hex;
 use time::PrimitiveDateTime;
+#[cfg(feature = "webauthn")]
 use webauthn_rs::prelude::Passkey;
 
 use crate::{
@@ -1395,6 +1396,7 @@ impl WalletStoreWriter for WriteTransaction<'_> {
         Ok(())
     }
 
+    #[cfg(feature = "webauthn")]
     fn webauthn_reg_insert(&mut self, username: String, passkey: Passkey) -> Result<(), WalletStorageError> {
         use crate::schema::{webauthn_registration_passkeys, webauthn_registrations};
         diesel::insert_into(webauthn_registrations::table)

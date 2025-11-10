@@ -27,7 +27,6 @@ use tari_template_lib::{
     types::{crypto::UtxoTag, Amount, TemplateAddress},
 };
 use tari_transaction::{Transaction, TransactionId};
-use webauthn_rs::prelude::Passkey;
 
 use crate::models::{
     Account,
@@ -295,6 +294,7 @@ pub trait WalletStoreReader {
 
     // Webauthn registration
     fn webauthn_is_user_registered(&mut self, username: &str) -> Result<bool, WalletStorageError>;
+    #[cfg(feature = "webauthn")]
     fn webauthn_reg_fetch_passkeys(&mut self, username: String) -> Result<Vec<Passkey>, WalletStorageError>;
 
     // Authored templates
@@ -474,6 +474,7 @@ pub trait WalletStoreWriter {
     ) -> Result<(), WalletStorageError>;
 
     // Webauthn registrations
+    #[cfg(feature = "webauthn")]
     fn webauthn_reg_insert(&mut self, username: String, passkey: Passkey) -> Result<(), WalletStorageError>;
 
     // Authored templates

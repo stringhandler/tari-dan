@@ -3,7 +3,9 @@
 
 pub mod wasm_optimizer;
 
+#[cfg(feature = "webauthn")]
 mod webauthn;
+#[cfg(feature = "webauthn")]
 pub use webauthn::*;
 
 mod session_store;

@@ -17,6 +17,7 @@ pub mod templates;
 pub mod transaction;
 pub mod validator;
 pub mod wallet;
+#[cfg(feature = "webauthn")]
 pub mod webauthn;
 pub mod webrtc;
 

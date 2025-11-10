@@ -18,6 +18,7 @@ mod non_fungible_tokens;
 mod resource;
 mod stealth_output;
 mod utxo_process_queue;
+#[cfg(feature = "webauthn")]
 mod webauthn_registrations;
 
 pub use account::*;
@@ -31,4 +32,5 @@ pub use substate::Substate;
 pub use transaction::*;
 pub use utxo_process_queue::*;
 pub use vault::Vault;
+#[cfg(feature = "webauthn")]
 pub use webauthn_registrations::*;

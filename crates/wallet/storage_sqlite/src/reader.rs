@@ -45,7 +45,6 @@ use tari_ootle_wallet_sdk::{
         VaultModel,
         WalletLockId,
         WalletTransaction,
-        WebauthnRegistrationPasskeyModel,
     },
     storage::{TagAndPublicNoncePair, WalletStorageError, WalletStoreReader},
 };
@@ -55,11 +54,12 @@ use tari_template_lib::{
     types::{crypto::UtxoTag, TemplateAddress},
 };
 use tari_transaction::TransactionId;
+#[cfg(feature = "webauthn")]
 use webauthn_rs::prelude::Passkey;
 
 use crate::{
     models,
-    models::{AuthoredTemplate, WebauthnRegistrationPasskey},
+    models::AuthoredTemplate,
     schema::accounts,
     serialization::{deserialize_hex_try_from, deserialize_json, serialize_hex},
 };
@@ -1204,6 +1204,7 @@ impl WalletStoreReader for ReadTransaction<'_> {
         Ok(count > 0)
     }
 
+    #[cfg(feature = "webauthn")]
     fn webauthn_reg_fetch_passkeys(&mut self, username: String) -> Result<Vec<Passkey>, WalletStorageError> {
         use crate::schema::{webauthn_registration_passkeys, webauthn_registrations};
         Ok(webauthn_registration_passkeys::table
